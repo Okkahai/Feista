@@ -34,6 +34,13 @@ export interface Node {
 
 /** Concrete nodes. A per-scene stage depending on another per-scene stage links scene-to-scene. */
 export function expand(stages: readonly StageDef[], sceneCount: number): Node[] {
+  if (!Number.isInteger(sceneCount) || sceneCount < 1) throw new Error("sceneCount must be a positive integer");
+  // deps must point at earlier stages: guarantees every dep exists and the graph is acyclic
+  const seen = new Set<string>();
+  for (const s of stages) {
+    for (const d of s.deps) if (!seen.has(d)) throw new Error(`stage ${s.id}: dep ${d} unknown or not earlier`);
+    seen.add(s.id);
+  }
   const per = new Set(stages.filter((s) => s.perScene).map((s) => s.id));
   const idsOf = (stage: string) =>
     per.has(stage) ? Array.from({ length: sceneCount }, (_, i) => `${stage}:${i}`) : [stage];
