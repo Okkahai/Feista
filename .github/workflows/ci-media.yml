@@ -1,0 +1,20 @@
+name: ci-media
+on:
+  pull_request:
+    paths: ["workers/media/**", ".github/workflows/ci-media.yml"]
+  push:
+    branches: [develop, main]
+    paths: ["workers/media/**"]
+jobs:
+  media:
+    runs-on: ubuntu-24.04
+    defaults: { run: { working-directory: workers/media } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: mypy feista_media
+      - run: pytest -q
