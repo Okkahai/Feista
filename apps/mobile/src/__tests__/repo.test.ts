@@ -24,6 +24,7 @@ describe("fixture repo", () => {
     const p = project(r);
     expect(p.runs[sceneNode(1)]?.status).toBe("queued");
     expect(p.scenes[1]?.revisionNote).toBe("slower push-in");
+    expect(p.runs[sceneNode(1)]).toMatchObject({ generation: 2, attempt: 1 }); // new take per core
   });
   it("retry re-queues a failed node and bumps the take; max attempts is refused", async () => {
     const r = createFixtureRepo(undefined, at);
@@ -35,6 +36,10 @@ describe("fixture repo", () => {
     const r = createFixtureRepo(undefined, at);
     const id = await r.createStory({ title: "Test", durationSec: 30, aspect: "9:16", style: "", voice: "Mara", sceneCount: 3, budgetCapCents: 2000 });
     expect(projectStatus(project(r, id))).toBe("queued");
+    // 60 s x 6 scenes is over the 15 USD approval threshold: refused unless approved
+    const big = { title: "Big", durationSec: 60, aspect: "9:16" as const, style: "", voice: "Mara", sceneCount: 6, budgetCapCents: 5000 };
+    await expect(r.createStory(big)).rejects.toThrow(/approval/);
+    await expect(r.createStory({ ...big, approved: true })).resolves.toMatch(/^p/);
     await expect(r.createStory({ title: " ", durationSec: 30, aspect: "9:16", style: "", voice: "Mara", sceneCount: 3, budgetCapCents: 2000 })).rejects.toThrow();
   });
 });

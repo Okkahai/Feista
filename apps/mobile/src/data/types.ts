@@ -60,6 +60,8 @@ export interface StoryInput {
   voice: string;
   sceneCount: number;
   budgetCapCents: number;
+  /** User explicitly approved the estimate (skips only the approval-threshold gate). */
+  approved?: boolean;
 }
 
 export type { JobStatus };

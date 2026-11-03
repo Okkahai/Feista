@@ -88,7 +88,7 @@ const NodeRow = memo(function NodeRow({ title, run, onRetry, last, sub, nodeId, 
         </View>
         {run ? (
           <Text style={type.monoXS}>
-            {`TAKE ${run.attempt}/${run.maxAttempts} · ${time.format(new Date(run.updatedAt))} UTC${tags ? " · " + tags : ""}`}
+            {`${run.generation > 1 ? `GEN ${run.generation} · ` : ""}TAKE ${run.attempt}/${run.maxAttempts} · ${time.format(new Date(run.updatedAt))} UTC${tags ? " · " + tags : ""}`}
           </Text>
         ) : tags ? (
           <Text style={type.monoXS}>{tags}</Text>

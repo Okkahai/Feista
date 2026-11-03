@@ -106,7 +106,7 @@ function StoryForm({ state }: { state: StudioState }) {
     setBusy(true);
     setError(undefined);
     try {
-      const id = await repo.createStory({ title, durationSec, aspect, style, voice, sceneCount: scenes, budgetCapCents: capCents });
+      const id = await repo.createStory({ title, durationSec, aspect, style, voice, sceneCount: scenes, budgetCapCents: capCents, approved: needsApproval });
       setTitle("");
       router.push(`/project/${id}`);
     } catch (e) {

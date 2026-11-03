@@ -57,7 +57,7 @@ Fonts are loaded at runtime with `useFonts` from `@expo-google-fonts/*`. All thr
 | `StatusMark` | Maps each core `JobStatus` to label, shape and colour (table below). `STATUS_MARKS` is exported and unit-tested for uniqueness. |
 | `ContactSheet` | A virtualised two-up grid (FlashList). Each cell is a `Frame` with sprocket edges, an edge-printed frame number, the title, a mono caption and a StatusMark. |
 | `Frame` | One film frame: sprocket hole rows, an expo-image gate (blurhash placeholder until real keyframes exist) and the edge number. |
-| `StageTimeline` | A vertical rail through core `STORY_STAGES`. Per-scene stages fan out into SC01…SCnn sub-rows and collapse when every scene is complete. Each row shows `TAKE n/max`, the UTC time and PAID / HUMAN GATE tags. Failed rows show the error in tape red and an inline **Retry** button, or a printed reason when max attempts is reached. |
+| `StageTimeline` | A vertical rail through core `STORY_STAGES`. Per-scene stages fan out into SC01…SCnn sub-rows and collapse when every scene is complete. Each row shows `TAKE n/max` (with `GEN n ·` in front once a new take has been made), the UTC time and PAID / HUMAN GATE tags. Failed rows show the error in tape red and an inline **Retry** button, or a printed reason when max attempts is reached. |
 | `DagStrip` | A compact horizontal read of the whole DAG (one cell per node) with a counts line. Used on Studio. |
 | `Rule` | A hairline, thin or heavy rule, horizontal or vertical, in four tones. |
 | `SectionHead` | Heavy rule plus reel index (`01`, in slate) plus Anton title plus right-aligned mono aside. Marked as a header for accessibility. |
@@ -92,7 +92,8 @@ All screens read through `src/data/repo.ts`, which is backed by fixtures for now
 Fixture actions run through `@feista/core`:
 - approve: `awaiting_review → completed`
 - revise: `→ queued`, then downstream resets via `invalidated()`
-- retry: `failed → queued`, with core's max-attempts guard
+- retry: `failed → queued`, with core's `blockedReason()` guard
+- create: `createStory` re-checks spend with `decideSpend` against the project cap and the month limit. It refuses deny, and refuses needs_approval unless the user pressed "Approve & queue" (`{ approved: true }`).
 
 ## Vercel React Native rules applied
 

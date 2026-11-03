@@ -36,7 +36,7 @@ function runs(
     const v = set[n.id] ?? set[n.stage];
     if (v === undefined) continue;
     const [status, extra] = Array.isArray(v) ? v : [v, {}];
-    out[n.id] = { nodeId: n.id, status, attempt: 1, maxAttempts: 3, updatedAt: at, ...extra };
+    out[n.id] = { nodeId: n.id, status, generation: 1, attempt: 1, maxAttempts: 3, leaseLosses: 0, maxLeaseLosses: 2, updatedAt: at, ...extra };
   }
   return out;
 }

@@ -6,7 +6,7 @@
  */
 import { useSyncExternalStore } from "react";
 import {
-  STORY_STAGES, expand, invalidated, transition, committedCents,
+  STORY_STAGES, expand, invalidated, transition, blockedReason, committedCents, decideSpend,
   type JobStatus, type LedgerEntry, type StageRun,
 } from "@feista/core";
 import { FIXTURE_NOW, FRAMES, initialState } from "./fixtures";
@@ -37,11 +37,11 @@ export function projectStatus(p: Project): JobStatus {
   return all.some((s) => s === "completed") ? "running" : "queued";
 }
 
-/** Can a failed node be retried? Mirrors the guard inside core's transition(). */
+/** Why a failed node can't be retried (core's blockedReason, worded for the UI), or undefined. */
 export function retryBlockedReason(run: StageRun | undefined): string | undefined {
   if (!run || run.status !== "failed") return "Only failed stages can be retried";
-  if (run.attempt >= run.maxAttempts) return `Max attempts reached (${run.attempt}/${run.maxAttempts}) — edit the brief instead`;
-  return undefined;
+  if (!blockedReason(run, "queued")) return undefined;
+  return run.attempt >= run.maxAttempts ? `Max attempts reached (${run.attempt}/${run.maxAttempts}) — edit the brief instead` : "Retry not allowed";
 }
 
 /** Fixture price model. shortcut: flat per-unit cents, replace with provider estimateCents() once adapters exist. */
@@ -124,6 +124,17 @@ export function createFixtureRepo(seed: StudioState = initialState(), clock: () 
       if (!Number.isInteger(input.sceneCount) || input.sceneCount < 1 || input.sceneCount > 12) throw new Error("scenes must be 1–12");
       if (input.durationSec < 15 || input.durationSec > 180) throw new Error("duration must be 15–180 s");
       if (!Number.isInteger(input.budgetCapCents) || input.budgetCapCents <= 0) throw new Error("budget cap must be positive");
+      // Repo re-checks spend itself; the form's preview is advisory.
+      const sp = state.settings.spending;
+      const estimate = estimateStoryCents(input.sceneCount, input.durationSec);
+      const opts = { approved: input.approved === true };
+      for (const d of [
+        decideSpend({ limitCents: input.budgetCapCents, approvalThresholdCents: sp.approvalThresholdCents, warnFraction: sp.warnFraction }, [], estimate, opts),
+        decideSpend({ limitCents: sp.monthlyLimitCents, approvalThresholdCents: sp.approvalThresholdCents, warnFraction: sp.warnFraction }, monthLedger(state), estimate, opts),
+      ]) {
+        if (d.decision === "deny") throw new Error("estimate exceeds budget");
+        if (d.decision === "needs_approval") throw new Error("estimate needs explicit approval");
+      }
       const n = state.projects.length + 145;
       const now = clock().toISOString();
       const each = Math.round((input.durationSec * 1000) / input.sceneCount);
@@ -140,7 +151,7 @@ export function createFixtureRepo(seed: StudioState = initialState(), clock: () 
         scenes: Array.from({ length: input.sceneCount }, (_, index) => ({
           index, beat: "Awaiting script", durationMs: each, blurhash: FRAMES[index % FRAMES.length] ?? FRAMES[0],
         })),
-        runs: { concept: { nodeId: "concept", status: "queued", attempt: 1, maxAttempts: 3, updatedAt: now } },
+        runs: { concept: { nodeId: "concept", status: "queued", generation: 1, attempt: 1, maxAttempts: 3, leaseLosses: 0, maxLeaseLosses: 2, updatedAt: now } },
         ledger: [],
         budget: {
           limitCents: input.budgetCapCents,
