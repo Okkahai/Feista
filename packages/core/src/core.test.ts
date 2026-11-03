@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   STORY_STAGES, expand, readyNodes, invalidated,
-  transition, canTransition, retryDelayMs, idempotencyKey, InvalidTransitionError, type StageRun,
+  transition, canTransition, blockedReason, retryDelayMs, idempotencyKey, InvalidTransitionError, type StageRun,
   decideSpend, committedCents,
   ProviderRegistry, type ProviderAdapter,
 } from "./index";
 
 const now = new Date("2026-11-03T00:00:00Z");
-const run = (over: Partial<StageRun> = {}): StageRun => ({ nodeId: "n", status: "queued", attempt: 1, maxAttempts: 2, updatedAt: "", ...over });
+const run = (over: Partial<StageRun> = {}): StageRun => ({
+  nodeId: "n", status: "queued", generation: 1, attempt: 1, maxAttempts: 2, leaseLosses: 0, maxLeaseLosses: 2, updatedAt: "", ...over,
+});
 
 describe("job lifecycle", () => {
   it("allows the happy path and rejects skipping", () => {
@@ -17,7 +19,7 @@ describe("job lifecycle", () => {
     r = transition(r, "completed", now);
     expect(r.status).toBe("completed");
     expect(() => transition(run(), "completed", now)).toThrow(InvalidTransitionError);
-    expect(canTransition("completed", "queued")).toBe(false);
+    expect(canTransition("completed", "running")).toBe(false);
     expect(canTransition("cancelled", "running")).toBe(false);
   });
 
@@ -37,9 +39,28 @@ describe("job lifecycle", () => {
     expect(retryDelayMs(20, 1000, 10_000, () => 0.999)).toBe(9990);
   });
 
-  it("idempotency key is stable per attempt", () => {
-    expect(idempotencyKey("p", "scene_video:2", "h", 1)).toBe(idempotencyKey("p", "scene_video:2", "h", 1));
-    expect(idempotencyKey("p", "scene_video:2", "h", 1)).not.toBe(idempotencyKey("p", "scene_video:2", "h", 2));
+  it("idempotency key is stable per attempt and changes for a retry or a new take", () => {
+    const r = run({ nodeId: "scene_video:2" });
+    expect(idempotencyKey("p", r, "h")).toBe(idempotencyKey("p", { ...r }, "h"));
+    expect(idempotencyKey("p", r, "h")).not.toBe(idempotencyKey("p", { ...r, attempt: 2 }, "h"));
+    const done = transition(transition(r, "running", now), "completed", now);
+    const take2 = transition(done, "queued", now);
+    expect(take2).toMatchObject({ generation: 2, attempt: 1 });
+    expect(idempotencyKey("p", take2, "h")).not.toBe(idempotencyKey("p", r, "h"));
+    // review revision is a new take too
+    const rev = transition(transition(transition(r, "running", now), "awaiting_review", now), "queued", now);
+    expect(rev.generation).toBe(2);
+  });
+
+  it("caps worker lease losses and reports exhausted retries before transition throws", () => {
+    let r = run();
+    for (let i = 0; i < 2; i++) r = transition(transition(r, "running", now), "queued", now);
+    r = transition(r, "running", now);
+    expect(blockedReason(r, "queued")).toMatch(/lost its worker/);
+    expect(() => transition(r, "queued", now)).toThrow(/lost its worker/);
+    expect(transition(r, "failed", now, "oom").status).toBe("failed");
+    expect(blockedReason(run({ status: "failed", attempt: 2 }), "queued")).toMatch(/max attempts/);
+    expect(canTransition("failed", "queued")).toBe(true); // the raw table; blockedReason is the scheduler's check
   });
 });
 
@@ -64,6 +85,11 @@ describe("story DAG", () => {
     expect(hit).toEqual(["scene_video:1", "assembly", "media_qa", "metadata", "review", "publish"]);
     expect(hit).not.toContain("scene_video:0");
     expect(hit).not.toContain("narration");
+  });
+
+  it("rejects zero scenes and unknown or forward deps", () => {
+    expect(() => expand(STORY_STAGES, 0)).toThrow();
+    expect(() => expand([{ id: "a", deps: ["b"] }, { id: "b", deps: [] }], 1)).toThrow(/not earlier/);
   });
 
   it("DAG is acyclic and every dep exists", () => {
@@ -96,6 +122,15 @@ describe("budget", () => {
   it("rejects malformed estimates", () => {
     expect(() => decideSpend(b, [], -1)).toThrow();
     expect(() => decideSpend(b, [], 1.5)).toThrow();
+  });
+  it("fails closed on corrupt budget or ledger data", () => {
+    expect(() => decideSpend(b, [{ estimatedCents: 10, reportedCents: Number.NaN }], 50)).toThrow();
+    expect(() => decideSpend({ ...b, limitCents: undefined as unknown as number }, [], 50)).toThrow();
+    expect(() => decideSpend({ ...b, warnFraction: Number.NaN }, [], 50)).toThrow();
+  });
+  it("an approved op skips only the threshold gate, never the cap", () => {
+    expect(decideSpend(b, [], 300, { approved: true }).decision).toBe("allow");
+    expect(decideSpend(b, [{ estimatedCents: 800 }], 300, { approved: true }).decision).toBe("deny");
   });
 });
 
