@@ -2,7 +2,7 @@
 import { useCallback, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Button, Choice, Field, MetaRow, Screen, SectionHead, Slate, Toggle } from "../../components";
-import { repo, useStudio } from "../../data/repo";
+import { parseUsdCents, repo, useStudio } from "../../data/repo";
 import type { Settings, StudioState } from "../../data/types";
 import { gutter, space, type } from "../../theme/tokens";
 
@@ -65,11 +65,17 @@ export default function SettingsScreen() {
 
 function MoneyField({ label, cents, onCommit, hint }: { label: string; cents: number; onCommit: (c: number) => void; hint?: string }) {
   const [text, setText] = useState((cents / 100).toFixed(2));
-  const parsed = Math.round(Number(text.replace(",", ".")) * 100);
-  const valid = text.trim() !== "" && Number.isInteger(parsed) && parsed > 0;
+  const [synced, setSynced] = useState(cents);
+  if (synced !== cents) {
+    // stored value changed elsewhere: re-sync during render (React's recommended pattern, no effect)
+    setSynced(cents);
+    setText((cents / 100).toFixed(2));
+  }
+  const parsed = parseUsdCents(text);
+  const valid = parsed !== undefined;
   const commit = useCallback(() => {
-    if (valid) onCommit(parsed);
-  }, [valid, parsed, onCommit]);
+    if (parsed !== undefined) onCommit(parsed);
+  }, [parsed, onCommit]);
   return (
     <Field
       label={label}
@@ -81,7 +87,7 @@ function MoneyField({ label, cents, onCommit, hint }: { label: string; cents: nu
       returnKeyType="done"
       suffix="USD"
       hint={hint}
-      error={valid ? undefined : "Enter an amount above 0"}
+      error={valid ? undefined : `Enter an amount like 250 or 250.00 (still using ${(cents / 100).toFixed(2)} USD)`}
     />
   );
 }

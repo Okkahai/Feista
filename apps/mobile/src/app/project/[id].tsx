@@ -72,11 +72,11 @@ export default function ProjectScreen() {
       <MetaRow k="Look" v={project.style} />
       <MetaRow k="Voice" v={project.voice} />
       <MetaRow k="Budget" v={`${formatCents(committedCents(project.ledger))} / ${formatCents(project.budget.limitCents)}`} />
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error ? <Text style={styles.error} accessibilityRole="alert" accessibilityLiveRegion="polite">{error}</Text> : null}
 
       <SectionHead index="01" title="Dailies" aside={toReview ? `${toReview} TO REVIEW` : "NONE WAITING"} />
       {project.scenes.map((s) => (
-        <ShotRow key={s.index} project={project} scene={s} inMs={inPoints[s.index] ?? 0} onAct={run} />
+        <ShotRow key={s.index} project={project} scene={s} inMs={inPoints[s.index] ?? 0} />
       ))}
 
       <SectionHead index="02" title="Stage timeline" aside="STORY DAG" />
@@ -85,11 +85,22 @@ export default function ProjectScreen() {
   );
 }
 
-function ShotRow({ project, scene, inMs, onAct }: { project: Project; scene: Scene; inMs: number; onAct: (fn: () => Promise<void>) => void }) {
+function ShotRow({ project, scene, inMs }: { project: Project; scene: Scene; inMs: number }) {
   const nodeRun = project.runs[sceneNode(scene.index)];
   const reviewing = nodeRun?.status === "awaiting_review";
   const [revising, setRevising] = useState(false);
   const [note, setNote] = useState("");
+  const [rowError, setRowError] = useState<string>();
+  // errors render on the row that was acted on, so they're visible and announced
+  const onAct = async (fn: () => Promise<void>, after?: () => void) => {
+    setRowError(undefined);
+    try {
+      await fn();
+      after?.();
+    } catch (e) {
+      setRowError(e instanceof Error ? e.message : String(e));
+    }
+  };
   const sc = `SC${String(scene.index + 1).padStart(2, "0")}`;
 
   return (
@@ -117,6 +128,7 @@ function ShotRow({ project, scene, inMs, onAct }: { project: Project; scene: Sce
             />
           ) : null}
           {scene.revisionNote ? <Text style={styles.note}>{`REVISION: ${scene.revisionNote}`}</Text> : null}
+          {rowError ? <Text style={styles.rowError} accessibilityRole="alert" accessibilityLiveRegion="polite">{rowError}</Text> : null}
         </View>
       </View>
       {reviewing && !revising ? (
@@ -140,7 +152,7 @@ function ShotRow({ project, scene, inMs, onAct }: { project: Project; scene: Sce
                 label="Send back"
                 variant="destructive"
                 disabledReason={note.trim() ? undefined : "Write what should change"}
-                onPress={() => onAct(() => repo.requestRevision(project.id, scene.index, note))}
+                onPress={() => onAct(() => repo.requestRevision(project.id, scene.index, note), () => { setRevising(false); setNote(""); })}
                 testID={`send-revision-${scene.index}`}
               />
             </View>
@@ -158,6 +170,7 @@ const styles = StyleSheet.create({
   back: { minHeight: touch.min, minWidth: 88, justifyContent: "center", paddingLeft: gutter.left, marginBottom: space[3], alignSelf: "flex-start" },
   pressed: { opacity: 0.6 },
   error: { ...type.monoS, color: color.tape, paddingLeft: gutter.left, paddingTop: space[4] },
+  rowError: { ...type.monoS, color: color.tape },
   shot: { paddingLeft: gutter.left, paddingRight: gutter.right, paddingVertical: space[5], gap: space[4], borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.rule },
   shotReview: { borderLeftWidth: 3, borderLeftColor: color.slate, paddingLeft: gutter.left - 3 },
   shotTop: { flexDirection: "row", gap: space[4] },

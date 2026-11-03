@@ -10,6 +10,8 @@ jest.mock("expo-router", () => ({
 
 const metrics = { frame: { x: 0, y: 0, width: 390, height: 844 }, insets: { top: 47, left: 0, right: 0, bottom: 34 } };
 
+beforeEach(() => repo.reset()); // each test starts from fresh fixtures
+
 describe("shot review flow (fixture repo)", () => {
   it("approve on a scene in review completes it and removes its review actions", async () => {
     await render(
@@ -35,6 +37,7 @@ describe("shot review flow (fixture repo)", () => {
     await fireEvent.changeText(screen.getByLabelText("Note for SC02"), "hold on the cat");
     await fireEvent.press(screen.getByTestId("send-revision-1"));
     expect(screen.getByText("REVISION: hold on the cat")).toBeTruthy();
-    expect(screen.getByText("NONE WAITING")).toBeTruthy();
+    expect(screen.getByText("1 TO REVIEW")).toBeTruthy(); // SC01 still waiting: this test no longer depends on the first
+    expect(screen.queryByLabelText("Note for SC02")).toBeNull(); // form closed after sending
   });
 });

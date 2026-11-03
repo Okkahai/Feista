@@ -68,7 +68,19 @@ export function spendSummary(ledger: readonly LedgerEntry[]) {
   };
 }
 
-export function createFixtureRepo(seed: StudioState = initialState(), clock: () => Date = () => new Date()): StudioRepo {
+/** Parse a typed USD amount to cents. Only "12", "12.5", "12,50" forms; "1,000" is ambiguous and rejected. */
+export function parseUsdCents(text: string): number | undefined {
+  const t = text.trim();
+  if (!/^\d{1,7}([.,]\d{1,2})?$/.test(t)) return undefined;
+  const cents = Math.round(Number(t.replace(",", ".")) * 100);
+  return cents > 0 ? cents : undefined;
+}
+
+// shortcut: the fixture clock is pinned to FIXTURE_NOW so new projects land in the fixtures' month; the API repo uses real time.
+export function createFixtureRepo(
+  seed: StudioState = initialState(),
+  clock: () => Date = () => FIXTURE_NOW,
+): StudioRepo & { reset(next?: StudioState): void } {
   let state = seed;
   const listeners = new Set<() => void>();
   const commit = (next: StudioState) => {
@@ -116,6 +128,9 @@ export function createFixtureRepo(seed: StudioState = initialState(), clock: () 
       });
     },
     async retryStage(projectId, nodeId) {
+      // enforced here too, not only in the UI: core allows completed -> queued (new take), which is not a retry
+      const blocked = retryBlockedReason(state.projects.find((p) => p.id === projectId)?.runs[nodeId]);
+      if (blocked) throw new Error(blocked);
       editProject(projectId, (p) => moveNode(p, nodeId, "queued"));
     },
     async createStory(input) {
@@ -152,7 +167,7 @@ export function createFixtureRepo(seed: StudioState = initialState(), clock: () 
           index, beat: "Awaiting script", durationMs: each, blurhash: FRAMES[index % FRAMES.length] ?? FRAMES[0],
         })),
         runs: { concept: { nodeId: "concept", status: "queued", generation: 1, attempt: 1, maxAttempts: 3, leaseLosses: 0, maxLeaseLosses: 2, updatedAt: now } },
-        ledger: [],
+        ledger: [{ estimatedCents: estimate }], // reserve the estimate so the month cap sees it
         budget: {
           limitCents: input.budgetCapCents,
           approvalThresholdCents: state.settings.spending.approvalThresholdCents,
@@ -165,11 +180,14 @@ export function createFixtureRepo(seed: StudioState = initialState(), clock: () 
     async updateSettings(patch) {
       commit({ ...state, settings: patch(state.settings) });
     },
+    reset(next = initialState()) {
+      commit(next);
+    },
   };
 }
 
 /** The app-wide repo. FIXTURE-BACKED: swap for an API repo here. */
-export const repo: StudioRepo = createFixtureRepo();
+export const repo = createFixtureRepo();
 
 /** Subscribe to one slice. Selector must return an existing reference (no new arrays/objects). */
 export function useStudio<T>(selector: (s: StudioState) => T): T {

@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { decideSpend, type SpendDecision } from "@feista/core";
 import { Button, Choice, Field, MetaRow, Screen, SectionHead, Slate } from "../../components";
-import { estimateStoryCents, monthLedger, repo, useStudio } from "../../data/repo";
+import { estimateStoryCents, monthLedger, parseUsdCents, repo, useStudio } from "../../data/repo";
 import type { Aspect, StudioState } from "../../data/types";
 import { formatCents } from "../../lib/format";
 import { color, gutter, space, touch, type } from "../../theme/tokens";
@@ -77,8 +77,9 @@ function StoryForm({ state }: { state: StudioState }) {
   const [busy, setBusy] = useState(false);
 
   const durationSec = Number(duration);
-  const capCents = Math.round(Number(cap.replace(",", ".")) * 100);
-  const capValid = Number.isFinite(capCents) && capCents > 0;
+  const parsedCap = parseUsdCents(cap);
+  const capValid = parsedCap !== undefined;
+  const capCents = parsedCap ?? 0;
   const estimate = estimateStoryCents(scenes, durationSec);
 
   const { project, month } = useMemo(() => {
