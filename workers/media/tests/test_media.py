@@ -47,7 +47,8 @@ def episode(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_assembly_meets_delivery_spec(episode: Path, tmp_path: Path) -> None:
     before = sorted(p.name for p in episode.rglob("*"))
     out = tmp_path / "final.mp4"
-    plan = build_short(episode, tmp_path / "work", out)
+    # quote, colon and comma in the work dir must not break (or inject into) the filtergraph
+    plan = build_short(episode, tmp_path / "it's: a, work", out)
     assert plan.total == pytest.approx(20.0)
     rep = probe(out)
     assert (rep.width, rep.height) == (1080, 1920)
@@ -79,15 +80,23 @@ def test_plan_rejects_unsafe_or_broken_config() -> None:
         load_plan(dict(CFG, vo_shot={"1": 9, "2": 1, "3": 3}))
     with pytest.raises(ValueError):
         load_plan(dict(CFG, cuts=[["S1", 0, 0]]))
+    for music in ("../../secret.wav", "/etc/passwd", "concat:/etc/hosts|x", ".hidden"):
+        with pytest.raises(ValueError):
+            load_plan(dict(CFG, music=music))
+    for silence in ([9, 0, 1], [-1, 0, 1], [0, -1, 1]):
+        with pytest.raises(ValueError):
+            load_plan(dict(CFG, silence=silence))
+    with pytest.raises(ValueError):
+        load_plan(dict(CFG, vo_offset={"1": -0.1, "2": 0.4, "3": 0.5}))
 
 
 def test_qa_flags_bad_output(tmp_path: Path) -> None:
     bad = tmp_path / "bad.mp4"
     # wrong size, too short, no audio, 2 s of frozen black
-    ff("-f", "lavfi", "-i", "color=black:size=720x1280:rate=30:duration=3", "-c:v", "libx264", "-b:v", "500k", str(bad))
+    ff("-f", "lavfi", "-i", "color=black:size=720x1280:rate=24:duration=3", "-c:v", "libx264", "-b:v", "500k", str(bad))
     fails = check(probe(bad))
     joined = " | ".join(fails)
-    for needle in ("resolution", "duration", "bitrate", "no audio", "frozen", "black"):
+    for needle in ("resolution", "duration", "bitrate", "no audio", "frozen", "black", "frame rate"):
         assert needle in joined, joined
 
 
@@ -99,3 +108,10 @@ def test_qa_flags_long_silence(tmp_path: Path) -> None:
        "-c:v", "libx264", "-b:v", "8000k", "-c:a", "aac", str(f))
     rep = probe(f)
     assert any("silence" in x for x in check(rep, Spec(min_video_kbps=0, lufs_tolerance=99)))
+
+
+def test_qa_rejects_file_without_video(tmp_path: Path) -> None:
+    f = tmp_path / "audio.m4a"
+    ff("-f", "lavfi", "-i", "sine=duration=1", str(f))
+    with pytest.raises(ValueError, match="no video"):
+        probe(f)

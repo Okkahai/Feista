@@ -14,6 +14,7 @@ from .ff import FFPROBE, run
 class Spec:
     width: int = 1080
     height: int = 1920
+    fps: float = 30.0
     min_duration: float = 15.0
     max_duration: float = 60.0
     min_video_kbps: int = 7000
@@ -54,7 +55,9 @@ def probe(path: Path) -> Report:
     p = subprocess.run([FFPROBE, "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)],
                        capture_output=True, text=True, check=True)
     info = json.loads(p.stdout)
-    v = next(s for s in info["streams"] if s["codec_type"] == "video")
+    v = next((s for s in info["streams"] if s["codec_type"] == "video"), None)
+    if v is None:
+        raise ValueError(f"{path}: no video stream")
     a = next((s for s in info["streams"] if s["codec_type"] == "audio"), None)
     num, den = (int(x) for x in v["avg_frame_rate"].split("/"))
     duration = float(info["format"]["duration"])
@@ -90,6 +93,8 @@ def check(r: Report, spec: Spec = DEFAULT_SPEC) -> list[str]:
     fails: list[str] = []
     if (r.width, r.height) != (spec.width, spec.height):
         fails.append(f"resolution {r.width}x{r.height}, want {spec.width}x{spec.height}")
+    if abs(r.fps - spec.fps) > 0.01:
+        fails.append(f"frame rate {r.fps:.2f}, want {spec.fps}")
     if not spec.min_duration <= r.duration <= spec.max_duration:
         fails.append(f"duration {r.duration:.1f}s outside {spec.min_duration}-{spec.max_duration}s")
     if r.video_kbps < spec.min_video_kbps:

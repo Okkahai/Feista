@@ -59,9 +59,20 @@ def load_plan(cfg: dict[str, Any]) -> Plan:
         if not 0 <= shot < len(cuts):
             raise ValueError(f"line {i}: vo_shot {shot} out of range")
         vo_at[i] = starts[shot] + float(cfg["vo_offset"][str(i)])
+    for i in script:
+        if float(cfg["vo_offset"][str(i)]) < 0:
+            raise ValueError(f"line {i}: negative vo_offset")
+    if t < 2:
+        raise ValueError("total duration under 2 s")
     sil = cfg.get("silence", [0, 0, 0])
-    return Plan(cuts, starts, t, script, vo_at, (int(sil[0]), float(sil[1]), float(sil[2])),
-                str(cfg.get("music", "music.mp3")), bool(cfg.get("upscale_sharpen")))
+    silence = (int(sil[0]), float(sil[1]), float(sil[2]))
+    if not 0 <= silence[0] < len(cuts) or silence[1] < 0 or silence[2] < 0:
+        raise ValueError(f"bad silence {sil}")
+    music = str(cfg.get("music", "music.mp3"))
+    # a bare file name inside the episode dir: no paths, no ffmpeg protocol prefixes
+    if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9_.-]*", music):
+        raise ValueError(f"bad music file name {music!r}")
+    return Plan(cuts, starts, t, script, vo_at, silence, music, bool(cfg.get("upscale_sharpen")))
 
 
 def _ts(x: float) -> str:
@@ -141,15 +152,17 @@ def mix_graph(plan: Plan) -> list[str]:
 
 def build_short(episode_dir: Path, work_dir: Path, out_file: Path,
                 transcribe: Transcriber | None = None) -> Plan:
-    ep = Path(episode_dir)
-    work = Path(work_dir)
+    ep = Path(episode_dir).resolve()  # absolute, so no input can be read as an ffmpeg protocol
+    work = Path(work_dir).resolve()
+    out_file = Path(out_file).resolve()
     work.mkdir(parents=True, exist_ok=True)
     out_file.parent.mkdir(parents=True, exist_ok=True)
     plan = load_plan(json.loads((ep / "config.json").read_text()))
 
     words_path = ep / "vo" / "words.json"
-    if words_path.exists():
-        words = json.loads(words_path.read_text())
+    cached = work / "words.json"  # whisper result from an earlier attempt: reuse so retries keep timings
+    if words_path.exists() or cached.exists():
+        words = json.loads((words_path if words_path.exists() else cached).read_text())
     else:
         tr = transcribe or whisper_transcriber()
         words = {str(i): tr(ep / "vo" / f"L{i}.mp3") for i in plan.script}
@@ -186,11 +199,10 @@ def build_short(episode_dir: Path, work_dir: Path, out_file: Path,
     loud2 = (f"[premix]loudnorm=I=-14:TP=-1.5:LRA=11:linear=true:measured_I={mj['input_i']}:"
              f"measured_TP={mj['input_tp']}:measured_LRA={mj['input_lra']}:measured_thresh={mj['input_thresh']}:"
              f"offset={mj['target_offset']},aresample=48000[a]")
-    # ass filter path: escape for the filtergraph parser
-    ass_arg = str(captions).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    vchain = f"[0:v]ass='{ass_arg}',fade=t=out:st={plan.total - 0.4}:d=0.4[v]"
+    # run in work/ with a relative captions path, as the original did: no filtergraph escaping needed
+    vchain = f"[0:v]ass=captions.ass,fade=t=out:st={plan.total - 0.4}:d=0.4[v]"
     run(["-loglevel", "error", "-y", *inputs, "-filter_complex", ";".join(f + [vchain, loud2]),
          "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "slow", "-b:v", "8000k", "-minrate", "7000k",
          "-maxrate", "9000k", "-bufsize", "12000k", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
-         str(out_file)])
+         str(out_file)], cwd=work)
     return plan
