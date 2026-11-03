@@ -128,3 +128,10 @@ Honest verdict: none of the screens read as a generic dark SaaS dashboard. There
 - **Slate repetition:** every tab uses the full Slate. A compact slate variant for secondary tabs would add rhythm.
 - **Spend this month:** derived from projects created this month, because ledger entries have no timestamps yet (`shortcut:` in `repo.ts`).
 - **Persistence and connections:** settings and fixture mutations are not persisted. No backend, health probe, key vault, push notifications or Clip Studio exist, and the UI says so.
+
+## Open critique (independent review, 2026-11-03)
+Accepted, scheduled for the next design pass:
+- The "cinematic analog" half is mostly typography. Add real material: subtle grain on frame thumbnails only, warm halation on the active frame, edge codes on the contact sheet.
+- The DAG strip's green/yellow/orange/red reads as a traffic-light dashboard. Replace it with lab-sheet marks (punch holes / edge-code ticks), keeping StatusMark shapes as the source of meaning.
+- Project detail: the two-line title plus the slate pushes the first Approve button to ~y=1400. Use a compact slate on secondary screens and keep the first review action above the fold.
+- 10–11 pt letterspaced mono is used heavily; raise metadata to ≥12 pt and measure contrast rather than trusting token comments.
