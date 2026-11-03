@@ -1,0 +1,13 @@
+node_modules/
+.expo/
+dist/
+*.tsbuildinfo
+__pycache__/
+.pytest_cache/
+.venv/
+.env
+.env.*
+!.env.example
+*.mp4
+*.mp3
+!workers/media/tests/fixtures/**
