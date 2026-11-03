@@ -42,9 +42,6 @@ describe("fixture repo", () => {
     await expect(r.createStory({ ...big, approved: true })).resolves.toMatch(/^p/);
     await expect(r.createStory({ title: " ", durationSec: 30, aspect: "9:16", style: "", voice: "Mara", sceneCount: 3, budgetCapCents: 2000 })).rejects.toThrow();
   });
-});
-
-describe("toTimecode", () => {
   it("new productions reserve their estimate so the monthly cap eventually denies", async () => {
     const r = createFixtureRepo(undefined, at);
     const input = { title: "T", sceneCount: 6, durationSec: 60, aspect: "9:16", style: "", voice: "Mara", budgetCapCents: 3000, approved: true } as const;
@@ -75,6 +72,9 @@ describe("toTimecode", () => {
     expect(parseUsdCents("12.05")).toBe(1205);
     for (const bad of ["1,000", "1.000", "", "0", "-5", "abc", "1e3"]) expect(parseUsdCents(bad)).toBeUndefined();
   });
+});
+
+describe("toTimecode", () => {
   it("formats HH:MM:SS:FF at 24 fps", () => {
     expect(toTimecode(0)).toBe("00:00:00:00");
     expect(toTimecode(12_166)).toBe("00:00:12:04");

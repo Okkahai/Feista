@@ -72,7 +72,6 @@ export default function ProjectScreen() {
       <MetaRow k="Look" v={project.style} />
       <MetaRow k="Voice" v={project.voice} />
       <MetaRow k="Budget" v={`${formatCents(committedCents(project.ledger))} / ${formatCents(project.budget.limitCents)}`} />
-      {error ? <Text style={styles.error} accessibilityRole="alert" accessibilityLiveRegion="polite">{error}</Text> : null}
 
       <SectionHead index="01" title="Dailies" aside={toReview ? `${toReview} TO REVIEW` : "NONE WAITING"} />
       {project.scenes.map((s) => (
@@ -81,6 +80,8 @@ export default function ProjectScreen() {
 
       <SectionHead index="02" title="Stage timeline" aside="STORY DAG" />
       <StageTimeline project={project} onRetry={onRetry} />
+      {/* timeline retries are the only page-level actions: show their errors right under the timeline */}
+      {error ? <Text style={styles.error} accessibilityRole="alert" accessibilityLiveRegion="polite">{error}</Text> : null}
     </Screen>
   );
 }

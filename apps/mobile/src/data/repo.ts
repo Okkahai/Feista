@@ -167,7 +167,8 @@ export function createFixtureRepo(
           index, beat: "Awaiting script", durationMs: each, blurhash: FRAMES[index % FRAMES.length] ?? FRAMES[0],
         })),
         runs: { concept: { nodeId: "concept", status: "queued", generation: 1, attempt: 1, maxAttempts: 3, leaseLosses: 0, maxLeaseLosses: 2, updatedAt: now } },
-        ledger: [{ estimatedCents: estimate }], // reserve the estimate so the month cap sees it
+        // shortcut: one reservation entry for the whole estimate; the API repo must release/replace it as per-stage reported costs arrive, or spend is double-counted
+        ledger: [{ estimatedCents: estimate }],
         budget: {
           limitCents: input.budgetCapCents,
           approvalThresholdCents: state.settings.spending.approvalThresholdCents,
