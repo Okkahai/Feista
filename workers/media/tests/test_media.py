@@ -115,3 +115,31 @@ def test_qa_rejects_file_without_video(tmp_path: Path) -> None:
     ff("-f", "lavfi", "-i", "sine=duration=1", str(f))
     with pytest.raises(ValueError, match="no video"):
         probe(f)
+
+
+def test_word_cache_invalidates_when_narration_changes(episode: Path, tmp_path: Path) -> None:
+    ep = tmp_path / "ep"
+    import shutil
+    shutil.copytree(episode, ep)
+    (ep / "vo" / "words.json").unlink()
+    calls: list[str] = []
+
+    def fake(p: Path) -> list[tuple[str, float, float]]:
+        calls.append(p.name)
+        return [("w", 0.0, 0.3)] * 6
+
+    from feista_media import assemble
+    real_run = assemble.run
+    assemble.run = lambda *a, **k: subprocess.CompletedProcess([], 0, "", '{"input_i":"-20","input_tp":"-3","input_lra":"5","input_thresh":"-30","target_offset":"0"}')  # type: ignore[assignment]
+    try:
+        work = tmp_path / "work"
+        build_short(ep, work, tmp_path / "o.mp4", transcribe=fake)
+        build_short(ep, work, tmp_path / "o.mp4", transcribe=fake)
+        assert len(calls) == 3  # second run reused the cache
+        cfg = json.loads((ep / "config.json").read_text())
+        cfg["script"]["1"] = "Something else fell."
+        (ep / "config.json").write_text(json.dumps(cfg))
+        build_short(ep, work, tmp_path / "o.mp4", transcribe=fake)
+        assert len(calls) == 6  # changed script -> re-transcribed
+    finally:
+        assemble.run = real_run

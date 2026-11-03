@@ -11,6 +11,7 @@ Inputs: clips/S*.mp4, vo/L*.mp3, music file; optional vo/words.json.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Callable
@@ -160,13 +161,19 @@ def build_short(episode_dir: Path, work_dir: Path, out_file: Path,
     plan = load_plan(json.loads((ep / "config.json").read_text()))
 
     words_path = ep / "vo" / "words.json"
-    cached = work / "words.json"  # whisper result from an earlier attempt: reuse so retries keep timings
-    if words_path.exists() or cached.exists():
-        words = json.loads((words_path if words_path.exists() else cached).read_text())
+    # whisper result from an earlier attempt, reused only if the script text and every VO file are unchanged
+    key = hashlib.sha256(json.dumps(plan.script, sort_keys=True).encode()
+                         + b"".join(hashlib.sha256((ep / "vo" / f"L{i}.mp3").read_bytes()).digest()
+                                    for i in sorted(plan.script))).hexdigest()
+    cached = work / f"words-{key[:16]}.json"
+    if words_path.exists():
+        words = json.loads(words_path.read_text())
+    elif cached.exists():
+        words = json.loads(cached.read_text())
     else:
         tr = transcribe or whisper_transcriber()
         words = {str(i): tr(ep / "vo" / f"L{i}.mp3") for i in plan.script}
-        (work / "words.json").write_text(json.dumps(words))
+        cached.write_text(json.dumps(words))
     captions = work / "captions.ass"
     captions.write_text(caption_ass(plan, words))
 
