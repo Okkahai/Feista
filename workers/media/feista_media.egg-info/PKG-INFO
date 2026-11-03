@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: feista-media
+Version: 0.1.0
+Summary: Feista media worker: Story Studio assembly + media QA (FFmpeg).
+Requires-Python: >=3.11
+Provides-Extra: whisper
+Requires-Dist: faster-whisper>=1.1; extra == "whisper"
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: ruff>=0.6; extra == "dev"
+Requires-Dist: mypy>=1.11; extra == "dev"
