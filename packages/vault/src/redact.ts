@@ -4,7 +4,6 @@
  */
 const R = "[REDACTED]";
 const PATTERNS: [RegExp, string][] = [
-  [/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]{0,16384}?-----END [A-Z ]*PRIVATE KEY-----/g, R],
   [/\b(sk|pk|rk)[-_](live[-_]|test[-_]|ant[-_]|proj[-_])?[A-Za-z0-9_-]{12,}/g, R], // OpenAI/Anthropic/Stripe-style
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, R], // JWT
   [/\bAIza[0-9A-Za-z_-]{35}\b/g, R], // Google API key
@@ -34,6 +33,20 @@ export function redact(text: string, known: readonly string[] = []): string {
     // also the forms a secret takes once URL-encoded or embedded in JSON
     for (const form of new Set([k, encodeURIComponent(k), JSON.stringify(k).slice(1, -1)])) out = out.split(form).join(R);
   }
+  out = redactPem(out);
   for (const [p, rep] of PATTERNS) out = out.replace(p, rep);
   return out;
+}
+
+/** PEM private keys via indexOf: a regex here is quadratic on unterminated BEGIN lines. */
+function redactPem(text: string): string {
+  const BEGIN = /-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----/g;
+  let out = "", last = 0, m: RegExpExecArray | null;
+  while ((m = BEGIN.exec(text))) {
+    const end = text.indexOf("PRIVATE KEY-----", m.index + m[0].length);
+    if (end < 0) break;
+    out += text.slice(last, m.index) + R;
+    last = BEGIN.lastIndex = end + "PRIVATE KEY-----".length;
+  }
+  return out + text.slice(last);
 }
