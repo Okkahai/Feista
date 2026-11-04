@@ -4,6 +4,7 @@ AI Content Studio. Expo app (control surface) + TypeScript API + Python FFmpeg w
 Owner: Gün (GitHub Okkahai). Product name: **Feista**.
 
 ## Layout
+- `packages/vault` — envelope encryption for BYOK keys (AES-256-GCM, versioned KEKs, owner-bound AAD) + log redaction.
 - `packages/core` — shared domain: job lifecycle, Story DAG, budget guard, provider adapter contract. Pure TS, vitest.
 - `workers/media` — Python worker: Story assembly (port of the proven Wobbi `build_short.py`) + media QA. pytest runs real ffmpeg.
 - `apps/mobile` — Expo Router app, Cinematic Analog × Editorial Brutalism design system (`docs/DESIGN_SYSTEM.md`).
