@@ -42,23 +42,41 @@ describe("fal", () => {
   it("maps queue states and HTTP errors to retry decisions, without echoing the key", async () => {
     const pending = falAdapter(fakeFetch([[/status$/, 200, { status: "IN_PROGRESS" }]]).f);
     expect((await pending.poll!(`${SEEDANCE}#r1`, ctx)).state).toBe("pending");
-    for (const [code, retryable] of [[401, false], [422, false], [429, true], [503, true]] as const) {
+    // a paid submit retries only when the provider provably rejected it up front: a 5xx may have been accepted
+    for (const [code, retryable] of [[401, false], [422, false], [429, true], [503, false]] as const) {
       const r = await falAdapter(fakeFetch([[/./, code, "nope"]]).f).submit({ modelId: SEEDANCE, capability: "video.text_to_video", input: {}, idempotencyKey: "k" }, ctx);
       expect(r).toMatchObject({ state: "error", retryable });
       expect(JSON.stringify(r)).not.toContain("fal-key-secret");
     }
-    const noUrl = falAdapter(fakeFetch([[/status$/, 200, { status: "COMPLETED" }], [/r1$/, 200, { video: { url: "file:///etc/passwd" } }]]).f);
-    expect(await noUrl.poll!(`${SEEDANCE}#r1`, ctx)).toMatchObject({ state: "error", retryable: false });
-    const bad = await falAdapter(fakeFetch([]).f).submit({ modelId: "../../x", capability: "image.generate", input: {}, idempotencyKey: "k" }, ctx);
-    expect(bad).toMatchObject({ state: "error", retryable: false });
+    // reads (status/result) are safe to retry on 5xx
+    expect(await falAdapter(fakeFetch([[/status$/, 503, "x"]]).f).poll!(`${SEEDANCE}#r1`, ctx)).toMatchObject({ retryable: true });
+    const offline = falAdapter((async () => { throw new TypeError("fetch failed"); }) as unknown as typeof fetch);
+    expect(await offline.submit({ modelId: SEEDANCE, capability: "video.text_to_video", input: {}, idempotencyKey: "k" }, ctx)).toMatchObject({ state: "error", retryable: false });
+    // a failed job reports COMPLETED with an error: surface it, do not fetch a "result"
+    const failed = fakeFetch([[/status$/, 200, { status: "COMPLETED", error: "content policy", error_type: "content_policy_violation" }]]);
+    expect(await falAdapter(failed.f).poll!(`${SEEDANCE}#r1`, ctx)).toMatchObject({ state: "error", retryable: false, message: expect.stringMatching(/content_policy_violation/) });
+    expect(failed.calls).toHaveLength(1);
+    for (const url of ["file:///etc/passwd", "https://169.254.169.254/latest/meta-data", "https://evil.example/fal.media/x.mp4", "https://v3.fal.media:8443/x.mp4"]) {
+      const noUrl = falAdapter(fakeFetch([[/status$/, 200, { status: "COMPLETED" }], [/r1$/, 200, { video: { url } }]]).f);
+      expect(await noUrl.poll!(`${SEEDANCE}#r1`, ctx), url).toMatchObject({ state: "error", retryable: false });
+    }
+    for (const modelId of ["../../x", "fal-ai/x/../../evil/app", "fal-ai/./x", "fal-ai/x..y/z", "Fal-AI/x"]) {
+      const bad = await falAdapter(fakeFetch([]).f).submit({ modelId, capability: "image.generate", input: {}, idempotencyKey: "k" }, ctx);
+      expect(bad, modelId).toMatchObject({ state: "error", retryable: false });
+    }
   });
 
   it("estimates from list prices and refuses to guess", () => {
     const fal = falAdapter(fakeFetch([]).f);
     const req = (modelId: string, input: Record<string, unknown>) => ({ modelId, capability: "video.text_to_video" as const, input, idempotencyKey: "k" });
-    expect(fal.estimateCents(req(SEEDANCE, { duration: 5 }))).toBe(152); // 5 s x 30.34c, rounded up
+    expect(fal.estimateCents(req(SEEDANCE, { duration: 5, resolution: "720p" }))).toBe(152); // 5 s x 30.34c, rounded up
+    expect(fal.estimateCents(req(SEEDANCE, { duration: 10, resolution: "1080p" }))).toBe(682);
+    expect(fal.estimateCents(req(SEEDANCE, { duration: 5 }))).toBeUndefined(); // model-default resolution: unknown price
+    expect(fal.estimateCents(req(SEEDANCE, { duration: 15, resolution: "4k" }))).toBeUndefined(); // token-billed: not priced
+    expect(fal.estimateCents(req(SEEDANCE, { duration: "auto", resolution: "720p" }))).toBeUndefined();
     expect(fal.estimateCents(req("fal-ai/nano-banana-2", { num_images: 2 }))).toBe(16);
-    expect(fal.estimateCents(req(SEEDANCE, {}))).toBeUndefined(); // no duration => no estimate
+    expect(fal.estimateCents(req("fal-ai/nano-banana-2", { num_images: 1, resolution: "4K", enable_web_search: true }))).toBe(18); // 16 + 1.5, rounded up
+    for (const num_images of [0, "abc", 1.5]) expect(fal.estimateCents(req("fal-ai/nano-banana-2", { num_images }))).toBeUndefined();
     expect(fal.estimateCents(req("someone/unknown-model", { duration: 5 }))).toBeUndefined();
   });
 });
@@ -84,6 +102,14 @@ describe("elevenlabs", () => {
     if (r.state !== "done") return;
     expect(r.outputs[0]).toEqual({ url: "data:audio/mpeg;base64,SUQz", mime: "audio/mpeg" });
     expect(JSON.parse(Buffer.from(r.outputs[1]!.url.split(",")[1]!, "base64").toString())).toEqual([["Hi", 0, 0.2], ["there.", 0.3, 0.9]]);
+  });
+
+  it("never retries once the characters may be billed", async () => {
+    const send = (f: typeof fetch) => elevenLabsAdapter({}, f).submit({ modelId: "m", capability: "audio.tts", input: { text: "Hi", voice_id: "v1" }, idempotencyKey: "k" }, { credential: "c" });
+    expect(await send(fakeFetch([[/./, 200, { audio_base64: "SUQz", alignment: { ...alignment, character_end_times_seconds: [0] } }]]).f)).toMatchObject({ state: "error", retryable: false });
+    expect(await send(fakeFetch([[/./, 200, "not json"]]).f)).toMatchObject({ state: "error", retryable: false });
+    expect(await send(fakeFetch([[/./, 500, "boom"]]).f)).toMatchObject({ state: "error", retryable: false });
+    expect(await send(fakeFetch([[/./, 429, "busy"]]).f)).toMatchObject({ state: "error", retryable: true });
   });
 
   it("validates input and has no estimate without the user's plan rate", async () => {

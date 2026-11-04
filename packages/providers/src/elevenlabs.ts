@@ -4,7 +4,7 @@
  * VERIFICATION: mocked. Contract-tested against the documented response shape; never called live.
  */
 import type { ProviderAdapter } from "@feista/core";
-import { type Fetch, httpError } from "./http";
+import { type Fetch, submitError, submitThrew } from "./http";
 
 export type Word = [text: string, start: number, end: number];
 
@@ -14,7 +14,7 @@ interface Alignment {
   character_end_times_seconds: number[];
 }
 
-/** Character timings → word timings in the media worker's words.json format. */
+/** Character timings → one line's word list; words.json maps line number → this list. */
 export function wordsFromAlignment(a: Alignment): Word[] {
   const n = a.characters.length;
   if (a.character_start_times_seconds.length !== n || a.character_end_times_seconds.length !== n) throw new Error("alignment arrays differ in length");
@@ -65,20 +65,33 @@ export function elevenLabsAdapter(opts: { centsPer1kChars?: number } = {}, fetch
       const { text, voice_id } = req.input as { text?: unknown; voice_id?: unknown };
       if (typeof text !== "string" || !text.trim() || text.length > 10_000) return { state: "error", retryable: false, message: "elevenlabs: text must be 1..10000 chars" };
       if (typeof voice_id !== "string" || !VOICE.test(voice_id)) return { state: "error", retryable: false, message: "elevenlabs: invalid voice_id" };
-      const res = await fetchImpl(`https://api.elevenlabs.io/v1/text-to-speech/${voice_id}/with-timestamps`, {
-        method: "POST",
-        headers: { "xi-api-key": ctx.credential, "content-type": "application/json" },
-        body: JSON.stringify({ text, model_id: req.modelId }),
-        ...(ctx.signal ? { signal: ctx.signal } : {}),
-      });
-      if (!res.ok) return httpError(res, "elevenlabs");
-      const body = (await res.json()) as { audio_base64?: string; alignment?: Alignment };
-      if (!body.audio_base64 || !body.alignment) return { state: "error", retryable: true, message: "elevenlabs: response missing audio or alignment" };
-      const words = wordsFromAlignment(body.alignment);
+      let res: Response;
+      try {
+        res = await fetchImpl(`https://api.elevenlabs.io/v1/text-to-speech/${voice_id}/with-timestamps`, {
+          method: "POST",
+          headers: { "xi-api-key": ctx.credential, "content-type": "application/json" },
+          body: JSON.stringify({ text, model_id: req.modelId }),
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
+        });
+      } catch (e) {
+        return submitThrew("elevenlabs", e);
+      }
+      if (!res.ok) return submitError(res, "elevenlabs");
+      // from here the characters are billed: a malformed body is reported, never retried
+      let words: Word[];
+      let audio: string;
+      try {
+        const body = (await res.json()) as { audio_base64?: string; alignment?: Alignment };
+        if (!body.audio_base64 || !body.alignment) throw new Error("missing audio or alignment");
+        audio = body.audio_base64;
+        words = wordsFromAlignment(body.alignment);
+      } catch (err) {
+        return { state: "error", retryable: false, message: `elevenlabs: unusable response (${err instanceof Error ? err.message : "parse error"})` };
+      }
       return {
         state: "done",
         outputs: [
-          { url: `data:audio/mpeg;base64,${body.audio_base64}`, mime: "audio/mpeg" },
+          { url: `data:audio/mpeg;base64,${audio}`, mime: "audio/mpeg" },
           { url: `data:application/json;base64,${Buffer.from(JSON.stringify(words)).toString("base64")}`, mime: "application/json" },
         ],
       };
