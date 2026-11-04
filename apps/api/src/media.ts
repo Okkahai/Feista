@@ -5,24 +5,31 @@
  * Asset convention: a node stores each output at `<project>/<node>/g<gen>/<relpath>`, where relpath
  * is its place in the episode dir assembly expects (config.json, clips/S1.mp4, vo/L1.mp3, music.mp3).
  */
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import type pg from "pg";
 import { asWorker } from "./db";
 import { PermanentError, type StageContext, type StageHandler } from "./runner";
 import type { Storage } from "./storage";
 
-const run = promisify(execFile);
 
 export interface MediaDeps {
   pool: pg.Pool; // feista_runner
   storage: Storage;
-  /** e.g. ["python3", "-m", "feista_media.cli"]; env must make feista_media importable. */
+  /** e.g. ["python3", "-m", "feista_media.cli"]; feista_media must be importable via PATH/PYTHONPATH. */
   cmd: string[];
-  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+}
+
+/**
+ * The child decodes untrusted provider media, so it gets an allowlisted env only: never the
+ * KEKs, DATABASE_URL or anything else from the runner's environment.
+ */
+export function childEnv(from: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const keep = ["PATH", "PYTHONPATH", "HOME", "LANG", "TMPDIR", "FFMPEG", "FFPROBE"];
+  return Object.fromEntries(keep.filter((k) => from[k] !== undefined).map((k) => [k, from[k]]));
 }
 
 const keyOf = (ctx: StageContext, rel: string) => `${ctx.projectId}/${ctx.nodeId}/g${ctx.generation}/${rel}`;
@@ -61,15 +68,30 @@ async function withTemp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
-/** The CLI exits non-zero on bad input / failed QA; its stdout JSON says why. Not retryable. */
-async function cli(deps: MediaDeps, args: string[]): Promise<string> {
-  try {
-    return (await run(deps.cmd[0]!, [...deps.cmd.slice(1), ...args], { env: deps.env ?? process.env, maxBuffer: 16 << 20, timeout: 20 * 60_000 })).stdout;
-  } catch (e) {
-    const err = e as { code?: unknown; stdout?: string; stderr?: string; message: string };
-    if (typeof err.code === "number") throw new PermanentError(`media worker exit ${err.code}: ${(err.stdout || err.stderr || "").slice(-400)}`);
-    throw e; // spawn failure / timeout: retryable
-  }
+const CAP = 64 * 1024;
+
+/**
+ * Runs the worker CLI in its own process group so a timeout kills ffmpeg too, not just python.
+ * Exit 1 (QA failed) and 2 (bad input) are permanent; anything else (75, signals, spawn errors) retries.
+ */
+function cli(deps: MediaDeps, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(deps.cmd[0]!, [...deps.cmd.slice(1), ...args], { env: childEnv(), detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "", err = "";
+    child.stdout.on("data", (d: Buffer) => (out = (out + d.toString()).slice(-CAP)));
+    child.stderr.on("data", (d: Buffer) => (err = (err + d.toString()).slice(-CAP)));
+    const killGroup = () => { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* already gone */ } };
+    const timer = setTimeout(killGroup, deps.timeoutMs ?? 20 * 60_000);
+    child.on("error", (e) => { clearTimeout(timer); reject(e); });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      killGroup(); // reap any grandchild still holding the group
+      if (code === 0) return resolve(out);
+      const tail = (out || err).slice(-400);
+      if (code === 1 || code === 2) return reject(new PermanentError(`media worker exit ${code}: ${tail}`));
+      reject(new Error(`media worker ${signal ? `killed by ${signal}` : `exit ${code}`}: ${tail}`));
+    });
+  });
 }
 
 export function mediaHandlers(deps: MediaDeps): Record<"assembly" | "media_qa", StageHandler> {
@@ -79,9 +101,13 @@ export function mediaHandlers(deps: MediaDeps): Record<"assembly" | "media_qa", 
       run: (ctx) =>
         withTemp(async (dir) => {
           const ep = join(dir, "episode");
+          const seen = new Map<string, string>();
           for (const a of await inputs(deps, ctx.projectId)) {
-            const rel = a.storage_key.split("/").slice(3).join("/"); // drop <project>/<node>/g<gen>
             if (a.node_id === "assembly" || a.node_id === "media_qa") continue;
+            const rel = a.storage_key.split("/").slice(3).join("/"); // drop <project>/<node>/g<gen>
+            const other = seen.get(rel);
+            if (other) throw new PermanentError(`${rel} is produced by both ${other} and ${a.node_id}`); // never pick one silently
+            seen.set(rel, a.node_id);
             await deps.storage.get(a.storage_key, join(ep, rel));
           }
           const out = join(dir, "final.mp4");

@@ -8,7 +8,7 @@ import { parse } from "pg-connection-string";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { KeyRing } from "@feista/vault";
 import { asUser } from "./db";
-import { type MediaDeps, mediaHandlers, storeOutput } from "./media";
+import { type MediaDeps, childEnv, mediaHandlers, storeOutput } from "./media";
 import { type StageHandler, runOnce } from "./runner";
 import { assertKey, localStorage } from "./storage";
 
@@ -25,8 +25,8 @@ const media: MediaDeps = {
   pool,
   storage: localStorage(join(dir, "store")),
   cmd: [process.env.FEISTA_MEDIA_PYTHON ?? "python3", "-m", "feista_media.cli"],
-  env: { ...process.env, PYTHONPATH: resolve(__dirname, "../../../workers/media") },
 };
+process.env.PYTHONPATH = resolve(__dirname, "../../../workers/media");
 const U = randomUUID();
 
 const ff = (...a: string[]) => execFileSync("ffmpeg", ["-loglevel", "error", "-y", ...a]);
@@ -84,6 +84,11 @@ async function produce(shotSeconds: number) {
        values (app_user(), 'story', 'm', 2, 100, 100, 0.8) returning id`,
     )).rows[0].id as string;
     await tx.query("insert into stage_runs (project_id, node_id, status, max_attempts, max_lease_losses) values ($1, 'concept', 'queued', 3, 2)", [id]);
+    // an output from another take of scene_video:0: must be ignored, not mixed into this cut
+    await tx.query(
+      "insert into assets (project_id, node_id, generation, kind, storage_key, mime, bytes) values ($1::uuid, 'scene_video:0', 2, 'video', $1::text || '/scene_video:0/g2/clips/S1.mp4', 'video/mp4', 1)",
+      [id],
+    );
     return id;
   });
   const handlers = { ...upstream(shotSeconds), ...mediaHandlers(media), metadata: { estimate: () => ({ provider: "fake", cents: 0 }), run: async () => {} } };
@@ -91,6 +96,13 @@ async function produce(shotSeconds: number) {
   const runs = (await admin.query("select node_id, status, error from stage_runs where project_id = $1", [pid])).rows as { node_id: string; status: string; error: string | null }[];
   return { pid, by: Object.fromEntries(runs.map((r) => [r.node_id, r])) };
 }
+
+describe("child process", () => {
+  it("gets an allowlisted environment: no KEKs, no database URL", () => {
+    const env = childEnv({ PATH: "/bin", PYTHONPATH: "/x", FEISTA_KEKS: "1:secret", DATABASE_URL: "postgres://u:p@h/d", AWS_SECRET_ACCESS_KEY: "s" });
+    expect(env).toEqual({ PATH: "/bin", PYTHONPATH: "/x" });
+  });
+});
 
 describe("storage keys", () => {
   it("accepts only server-shaped keys inside the root", () => {

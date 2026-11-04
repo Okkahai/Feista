@@ -143,3 +143,17 @@ def test_word_cache_invalidates_when_narration_changes(episode: Path, tmp_path: 
         assert len(calls) == 6  # changed script -> re-transcribed
     finally:
         assemble.run = real_run
+
+
+def test_cli_exit_codes_tell_the_runner_what_to_retry(tmp_path: Path) -> None:
+    import sys
+
+    ep = tmp_path / "ep"
+    ep.mkdir()
+    (ep / "config.json").write_text(json.dumps({**CFG, "cuts": [["../x", 0, 5]]}))
+    bad = subprocess.run([sys.executable, "-m", "feista_media.cli", "assemble", str(ep), "--work", str(tmp_path / "w"),
+                          "--out", str(tmp_path / "o.mp4")], capture_output=True, text=True, check=False)
+    assert bad.returncode == 2, bad.stdout  # bad input: permanent
+    missing = subprocess.run([sys.executable, "-m", "feista_media.cli", "qa", str(tmp_path / "nope.mp4")],
+                             capture_output=True, text=True, check=False)
+    assert missing.returncode == 75, missing.stdout  # probe failure: transient, not a QA verdict
