@@ -11,7 +11,7 @@ _Last updated 2026-11-04._ Status words: planned · implemented · mocked · tes
 ## Done (2026-11-04, BYOK backend foundation)
 - PR #5 `db/`: schema with forced RLS keyed on `app.user_id`, `feista_api` login role with no privileges of its own, temp tables revoked. **Tested locally + CI** (`db/tests/rls_test.sql`, mutation-checked).
 - PR #6 `@feista/vault`: AES-256-GCM envelope encryption bound to owner+provider+credential row, KEK rotation by re-wrap, log redaction (linear-time on hostile input). Two review rounds. **Tested locally + CI** (38 tests).
-- `apps/api` (Hono + pg): dev-token auth **stub**, `/v1/projects` (list/get/create), `/v1/credentials` (write-only BYOK keys: add/replace, list last4, revoke + wipe), `loadSecret()` for the job runner, redacted error logs. **Tested locally** against real Postgres as `feista_api` (10 integration tests). Not deployed.
+- `apps/api` (Hono + pg): dev-token auth **stub**, `/v1/projects` (list/get/create), `/v1/credentials` (write-only BYOK keys: add/replace, list last4, revoke + wipe), `loadSecret()` for the job runner, redacted error logs. **Tested locally** against real Postgres as `feista_api` (13 integration tests, incl. pooled-connection scoping and concurrent key adds). Not deployed.
 
 ## Review follow-ups (accepted, not done)
 - Design pass items in `DESIGN_SYSTEM.md` → "Open critique".
