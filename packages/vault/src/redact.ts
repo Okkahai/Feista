@@ -14,7 +14,7 @@ const PATTERNS: [RegExp, string][] = [
   [/\bya29\.[A-Za-z0-9._-]{20,}/g, R], // Google OAuth access token
   [/\b1\/\/[A-Za-z0-9_-]{20,}/g, R], // Google refresh token
   [/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{32}\b/gi, R], // fal "id:secret"
-  [/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)[^\s@/]+@/gi, `$1${R}@`], // DSN / URL userinfo password
+  [/(\b[a-z][a-z0-9+.-]{0,30}:\/\/[^\s:/@]{0,256}:)[^\s@/]+@/gi, `$1${R}@`], // DSN / URL userinfo password
   [/(\bSignature=)[0-9a-f]{16,}/gi, `$1${R}`], // SigV4 Authorization header
   [/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, R],
   // Authorization header schemes only after the header name, so prose like "Key results" survives

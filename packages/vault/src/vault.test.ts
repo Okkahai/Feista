@@ -121,6 +121,7 @@ describe("redact", () => {
     ['{"secretAccessKey":"wJalrXUtnFEMI"}', "wJalrXUtnFEMI"],
     ["Authorization: AWS4-HMAC-SHA256 Credential=AKIA/x, Signature=fe5f80f77d5fa3beca038a248ff027d0445342fe2855ddc963176630326f1024", "fe5f80f77d5f"],
     ["postgresql://feista:hunter2pass@db.local:5432/x", "hunter2pass"],
+    ["redis://:p4ssw0rdz@h:6379", "p4ssw0rdz"],
     ['{"api_key":"abc\\"defghij123"}', "defghij123"],
     ["ghp_abcdefghijklmnopqrstuvwxyz0123456789", "ghp_abcdef"],
     ["hf_abcdefghijklmnopqrstuvwxyz012345", "hf_abcdef"],
@@ -133,6 +134,7 @@ describe("redact", () => {
   it("stays linear on hostile input (unterminated PEM)", () => {
     const t0 = performance.now();
     redact("-----BEGIN PRIVATE KEY-----".repeat(20000));
+    for (const unit of ["a.", "a-", "a:", "key=", "a@"]) redact(unit.repeat(100000));
     expect(performance.now() - t0).toBeLessThan(1000);
   });
   it("leaves ordinary prose alone", () => {
