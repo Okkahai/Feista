@@ -1,0 +1,21 @@
+name: ci-mobile
+on:
+  pull_request:
+    paths: ["apps/mobile/**", "packages/core/**", "pnpm-lock.yaml", ".github/workflows/ci-mobile.yml"]
+  push:
+    branches: [develop, main]
+    paths: ["apps/mobile/**", "packages/core/**"]
+jobs:
+  mobile:
+    runs-on: ubuntu-24.04
+    defaults: { run: { working-directory: apps/mobile } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test --ci
+      - run: npx expo export --platform android --output-dir /tmp/export

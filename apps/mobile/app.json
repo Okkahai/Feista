@@ -1,0 +1,36 @@
+{
+  "expo": {
+    "name": "Feista",
+    "slug": "feista",
+    "scheme": "feista",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0E0D0C",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.feista.mobile"
+    },
+    "android": {
+      "package": "app.feista.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#0E0D0C",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-image",
+      ["expo-splash-screen", { "backgroundColor": "#0E0D0C" }]
+    ]
+  }
+}
