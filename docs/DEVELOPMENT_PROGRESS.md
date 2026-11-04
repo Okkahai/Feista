@@ -18,6 +18,8 @@ _Last updated 2026-11-04._ Status words: planned · implemented · mocked · tes
 - Media stages on the runner (`apps/api/src/media.ts`, `runner-main.ts`): `assembly` gathers the current-generation outputs of completed nodes into the episode layout and runs the `feista_media` port; `media_qa` checks the final against the delivery spec and fails permanently on a miss. Local directory storage (shortcut until MinIO/R2). **Tested locally** with real FFmpeg on synthetic media through the queue (pass + QA-fail cases). Runner process exists (`pnpm --filter @feista/api runner`) but only media stages have handlers; paid stages wait for provider adapters.
 - Known accepted gaps from the runner review: a retry replaces the node's unreported reservation, so a provider that still charged a failed attempt is undercounted by at most one estimate per lost attempt; a DB error inside the budget check rolls the claim back and re-queues the node.
 
+- `@feista/providers`: fal.ai queue adapter (submit / poll under owner/app / result / cancel, list-price estimates, unknown model = no estimate) and ElevenLabs `/with-timestamps` adapter (character → word timings in the media worker's words.json format; estimate only from the user's own plan rate). **Mocked**: contract-tested on documented response shapes (docs checked 2026-11-03); never called live. Not yet wired into runner stages.
+
 ## Review follow-ups (accepted, not done)
 - Design pass items in `DESIGN_SYSTEM.md` → "Open critique".
 - Create form duration range (30–90 s) vs repo (15–180 s): pick one source of truth when the API exists.
@@ -26,7 +28,7 @@ _Last updated 2026-11-04._ Status words: planned · implemented · mocked · tes
 - No automated parity test against the original `build_short.py` (manual regression only).
 
 ## Next (in order)
-1. Provider adapters as runner handlers (fal, ElevenLabs, LLM) on recorded fixtures; S3 storage (MinIO locally) replacing the local-dir shortcut; new-take invalidation (`invalidated()`) endpoint.
+1. Stage handlers that drive the adapters (keyframe/scene_video via fal, narration via ElevenLabs, concept/script via an LLM adapter), polling/webhooks for async jobs; S3 storage (MinIO locally) replacing the local-dir shortcut; new-take invalidation (`invalidated()`) endpoint.
 2. Real auth (Supabase Auth JWT or self-hosted equivalent) replacing the dev-token stub; user provisioning path.
 3. Provider adapters (fal, ElevenLabs, Anthropic, Higgsfield) with contract tests on recorded fixtures — live smoke tests only after Gün approves a small budget.
 4. Mobile ↔ API wiring, push notifications.
