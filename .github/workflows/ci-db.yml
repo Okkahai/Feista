@@ -1,0 +1,20 @@
+name: ci-db
+on:
+  pull_request:
+    paths: ["db/**", ".github/workflows/ci-db.yml"]
+  push:
+    branches: [develop, main]
+    paths: ["db/**"]
+jobs:
+  db:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: ci }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: db/tests/run.sh
+        env: { DATABASE_URL: "postgresql://postgres:ci@localhost:5432/postgres" }

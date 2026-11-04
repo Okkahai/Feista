@@ -23,6 +23,9 @@ _Last updated 2026-11-03 (session 1)._ Status words: planned · implemented · m
 5. Clip Studio custom pipeline (faster-whisper, MediaPipe reframing).
 6. YouTube OAuth app + publish adapter.
 
+## Rule (2026-11-04)
+Strictly BYOK: users pay their own providers; Gün pays for no generations. Infra stays on free tiers / local until Gün approves otherwise.
+
 ## Blocked on Gün (approval / accounts)
 - Paid/hosted services: Supabase, Cloudflare R2, Vercel Pro (commercial use), Railway/Cloud Run, fal.ai, ElevenLabs paid plan, Higgsfield API balance, Anthropic API key.
 - Google Cloud OAuth app (consent screen, verified domain, privacy policy) for YouTube.
