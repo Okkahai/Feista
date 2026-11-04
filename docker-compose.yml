@@ -1,0 +1,13 @@
+# Local dev stack, zero cost: Postgres + S3-compatible storage (MinIO, dev only).
+# shortcut: not exercised in CI (no Docker in the build sandbox); CI uses a Postgres service directly.
+services:
+  db:
+    image: postgres:16
+    environment: { POSTGRES_PASSWORD: dev, POSTGRES_DB: feista }
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["./db/migrations:/docker-entrypoint-initdb.d:ro"]
+  storage:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address ":9001"
+    environment: { MINIO_ROOT_USER: dev, MINIO_ROOT_PASSWORD: devdevdev }
+    ports: ["127.0.0.1:9000:9000", "127.0.0.1:9001:9001"]

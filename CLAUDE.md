@@ -7,6 +7,7 @@ Owner: Gün (GitHub Okkahai). Product name: **Feista**.
 - `packages/core` — shared domain: job lifecycle, Story DAG, budget guard, provider adapter contract. Pure TS, vitest.
 - `workers/media` — Python worker: Story assembly (port of the proven Wobbi `build_short.py`) + media QA. pytest runs real ffmpeg.
 - `apps/mobile` — Expo Router app, Cinematic Analog × Editorial Brutalism design system (`docs/DESIGN_SYSTEM.md`).
+- `db/` — SQL migrations + RLS isolation tests (`db/tests/run.sh`).
 - `docs/` — architecture, decisions, provider research, security, testing, progress. **Read `docs/DEVELOPMENT_PROGRESS.md` first.**
 
 ## Commands
@@ -15,7 +16,7 @@ Owner: Gün (GitHub Okkahai). Product name: **Feista**.
 
 ## Rules
 - PRs target `develop`. `main` = release; production deploys and public releases need Gün's approval.
-- No paid API calls, purchases or new paid services without Gün's explicit OK. Mock tests never count as "tested against provider".
+- **Strictly BYOK**: generations run on users' own keys; Gün pays for none. No paid API calls, purchases or paid services without his explicit OK. Mock tests never count as "tested against provider".
 - Track status honestly: planned / implemented / mocked / tested locally / tested live / integrated / production-ready.
 - Preserve the Wobbi production techniques (docs/ARCHITECTURE.md §1) unless a measured improvement replaces them; the media worker has a real-episode regression check (docs/TESTING.md).
 - YouTube: always send `status.privacyStatus` explicitly (API default became `public` on 2026-11-02). Never publish without the user's configured policy.

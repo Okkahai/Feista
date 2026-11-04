@@ -12,3 +12,5 @@
 | 8 | 2026-11-03 | Clip reframing with MediaPipe, not Ultralytics YOLO | YOLO is AGPL (commercial SaaS needs a paid licence) |
 | 9 | 2026-11-03 | Money stored as integer cents; estimate vs reported kept separately | No float drift; never present an estimate as billed |
 | 10 | 2026-11-03 | All cloud accounts (Supabase, R2, Vercel Pro, Railway, fal, ElevenLabs, Google OAuth app) are **blocked on Gün** | Spending money / creating paid services needs explicit approval. Local dev uses Docker Postgres + MinIO |
+| 11 | 2026-11-04 | **Strictly BYOK (Gün).** Every AI generation runs on the user's own connected keys and bills the user. The operator pays for no generations; no live provider tests on the operator's account. Infra on free tiers / local Docker; anything paid needs Gün's OK | Gün: "I don't want to use any paid creations on my side" |
+| 12 | 2026-11-04 | Tenant isolation in Postgres RLS (FORCED) keyed on `app.user_id` set per transaction, role `feista_app` | Isolation holds even if an API handler forgets a filter; works on Supabase or plain Postgres |
