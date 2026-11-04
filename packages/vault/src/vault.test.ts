@@ -66,6 +66,9 @@ describe("vault", () => {
     expect(() => KeyRing.parse(`1:${k1}`, 2)).toThrow();
     expect(() => seal(ring1, "short", A)).toThrow();
   });
+  it("exposes no KEK accessor", () => {
+    expect((ring2 as unknown as Record<string, unknown>).kek).toBeUndefined();
+  });
   it("never prints KEKs", () => {
     const raw = Buffer.from(k1, "base64").toString("hex");
     for (const s of [inspect(ring2, { showHidden: true, depth: 5 }), JSON.stringify(ring2), String(ring2)]) {
@@ -112,6 +115,25 @@ describe("redact", () => {
   it("redacts encoded forms of known secrets", () => {
     const s = "my/secret+key=value&x";
     expect(redact(`u?k=${encodeURIComponent(s)} j=${JSON.stringify({ s: 'a"b\\c' + s })}`, [s, 'a"b\\c' + s])).not.toMatch(/secret/);
+  });
+  it.each([
+    ["AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "wJalrXUtnFEMI"],
+    ['{"secretAccessKey":"wJalrXUtnFEMI"}', "wJalrXUtnFEMI"],
+    ["Authorization: AWS4-HMAC-SHA256 Credential=AKIA/x, Signature=fe5f80f77d5fa3beca038a248ff027d0445342fe2855ddc963176630326f1024", "fe5f80f77d5f"],
+    ["postgresql://feista:hunter2pass@db.local:5432/x", "hunter2pass"],
+    ['{"api_key":"abc\\"defghij123"}', "defghij123"],
+    ["ghp_abcdefghijklmnopqrstuvwxyz0123456789", "ghp_abcdef"],
+    ["hf_abcdefghijklmnopqrstuvwxyz012345", "hf_abcdef"],
+  ])("also: %s", (line, leak) => {
+    expect(redact(line)).not.toContain(leak);
+  });
+  it("does not over-match look-alike names", () => {
+    for (const line of ['"max_token":4096000', "nonsecret=visible1", "mysecret:visible2"]) expect(redact(line)).toBe(line);
+  });
+  it("stays linear on hostile input (unterminated PEM)", () => {
+    const t0 = performance.now();
+    redact("-----BEGIN PRIVATE KEY-----".repeat(20000));
+    expect(performance.now() - t0).toBeLessThan(1000);
   });
   it("leaves ordinary prose alone", () => {
     const prose = "Key results from the Basic plan: Key moments were great. Token budget remaining 4000.";

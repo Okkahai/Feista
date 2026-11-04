@@ -26,12 +26,19 @@ export interface Binding {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PROVIDER = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
-export class KeyRing {
-  readonly #keys: Map<number, Buffer>;
+// KEKs live only in this module-private map, so no caller can read or overwrite them.
+const KEKS = new WeakMap<KeyRing, Map<number, Buffer>>();
 
+function kek(ring: KeyRing, version: number): Buffer {
+  const k = KEKS.get(ring)?.get(version);
+  if (!k) throw new Error(`KEK version ${version} not available`);
+  return k;
+}
+
+export class KeyRing {
   private constructor(keys: Map<number, Buffer>, readonly current: number) {
     if (!keys.has(current)) throw new Error("current KEK version missing");
-    this.#keys = keys;
+    KEKS.set(this, keys);
   }
 
   /** `spec` = "1:<base64 32 bytes>,2:<base64>"; never logged. */
@@ -41,26 +48,20 @@ export class KeyRing {
       const m = /^(\d{1,6}):([A-Za-z0-9+/]{43}=)$/.exec(part.trim());
       if (!m) throw new Error("invalid KEK entry");
       const v = Number(m[1]);
-      const k = Buffer.alloc(32);
-      Buffer.from(m[2]!, "base64").copy(k);
+      const k = Buffer.alloc(32); // unpooled; decode straight into it so no pooled copy remains
+      k.write(m[2]!, "base64");
       if (v < 1 || keys.has(v) || k.every((b) => b === 0)) throw new Error("invalid KEK entry");
       keys.set(v, k);
     }
     return new KeyRing(keys, current);
   }
 
-  kek(version: number): Buffer {
-    const k = this.#keys.get(version);
-    if (!k) throw new Error(`KEK version ${version} not available`);
-    return k;
-  }
-
   [inspect.custom](): string {
-    return `KeyRing { versions: [${[...this.#keys.keys()].join(", ")}], current: ${this.current} }`;
+    return `KeyRing { versions: [${this.toJSON().versions.join(", ")}], current: ${this.current} }`;
   }
 
   toJSON(): { versions: number[]; current: number } {
-    return { versions: [...this.#keys.keys()], current: this.current };
+    return { versions: [...(KEKS.get(this)?.keys() ?? [])], current: this.current };
   }
 }
 
@@ -77,7 +78,12 @@ function dec(key: Buffer, blob: Buffer, aad: Buffer): Buffer {
   const d = createDecipheriv("aes-256-gcm", key, blob.subarray(0, 12), { authTagLength: 16 });
   d.setAAD(aad);
   d.setAuthTag(blob.subarray(12, 28));
-  return Buffer.concat([d.update(blob.subarray(28)), d.final()]);
+  const parts = [d.update(blob.subarray(28)), d.final()];
+  try {
+    return Buffer.concat(parts);
+  } finally {
+    for (const b of parts) b.fill(0); // best-effort: intermediate plaintext
+  }
 }
 
 function dataAad(b: Binding): Buffer {
@@ -96,7 +102,7 @@ export function seal(ring: KeyRing, secret: string, bind: Binding): Sealed {
   try {
     return {
       ciphertext: enc(dataKey, plain, aad),
-      wrappedKey: enc(ring.kek(ring.current), dataKey, wrapAad(aad, ring.current)),
+      wrappedKey: enc(kek(ring, ring.current), dataKey, wrapAad(aad, ring.current)),
       keyVersion: ring.current,
       last4: s.length >= 20 ? s.slice(-4) : "",
     };
@@ -107,7 +113,7 @@ export function seal(ring: KeyRing, secret: string, bind: Binding): Sealed {
 }
 
 function unwrap(ring: KeyRing, sealed: Sealed, aad: Buffer): Buffer {
-  return dec(ring.kek(sealed.keyVersion), sealed.wrappedKey, wrapAad(aad, sealed.keyVersion));
+  return dec(kek(ring, sealed.keyVersion), sealed.wrappedKey, wrapAad(aad, sealed.keyVersion));
 }
 
 /** Server-side only, immediately before a provider call. Never return this to a client. */
@@ -130,7 +136,7 @@ export function rewrap(ring: KeyRing, sealed: Sealed, bind: Binding): Sealed {
   const aad = dataAad(bind);
   const dataKey = unwrap(ring, sealed, aad);
   try {
-    return { ...sealed, wrappedKey: enc(ring.kek(ring.current), dataKey, wrapAad(aad, ring.current)), keyVersion: ring.current };
+    return { ...sealed, wrappedKey: enc(kek(ring, ring.current), dataKey, wrapAad(aad, ring.current)), keyVersion: ring.current };
   } finally {
     dataKey.fill(0);
   }
