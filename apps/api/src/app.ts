@@ -26,6 +26,7 @@ function int(v: unknown, name: string, min: number, max: number): number {
 }
 function str(v: unknown, name: string, min: number, max: number): string {
   if (typeof v !== "string" || v.trim().length < min || v.length > max) throw bad(`${name} must be ${min}..${max} characters`);
+  if (v.includes("\u0000")) throw bad(`${name} must not contain NUL`); // Postgres text rejects it
   return v.trim();
 }
 async function body(req: Request): Promise<Record<string, unknown>> {
@@ -39,6 +40,8 @@ export function createApp({ pool, ring, authenticate, log = console.error }: Dep
 
   app.onError((err, c) => {
     if (err instanceof HTTPException) return c.json({ error: err.message }, err.status);
+    // FK on owner_id: a validly signed token for a user that has no users row (deleted / not provisioned)
+    if ((err as { code?: string }).code === "23503") return c.json({ error: "unknown user" }, 401);
     log(redact(`${c.req.method} ${c.req.path} failed: ${err.stack ?? err.message}`));
     return c.json({ error: "internal error" }, 500);
   });
@@ -113,6 +116,8 @@ export function createApp({ pool, ring, authenticate, log = console.error }: Dep
       throw bad("secret must be 8..4096 characters");
     }
     const row = await asUser(pool, uid, async (tx) => {
+      // serialize concurrent adds for this user+provider; otherwise both revoke nothing and one hits the unique index
+      await tx.query("select pg_advisory_xact_lock(hashtext('feista:cred:' || app_user()::text || ':' || $1))", [provider]);
       await revoke(tx, "provider = $1", [provider]); // one active key per provider
       return (await tx.query(
         `insert into credentials (id, owner_id, provider, label, ciphertext, wrapped_key, key_version, last4)

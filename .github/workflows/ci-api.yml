@@ -21,4 +21,4 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @feista/api typecheck
       - run: pnpm --filter @feista/api test
-        env: { DATABASE_URL: "postgresql://postgres:ci@localhost:5432/postgres" }
+        env: { DATABASE_URL: "postgresql://postgres:ci@localhost:5432/postgres", FEISTA_DISPOSABLE_DB: "1" }

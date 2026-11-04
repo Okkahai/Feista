@@ -51,6 +51,21 @@ describe("auth", () => {
   });
 });
 
+describe("transaction scoping", () => {
+  it("leaves no role or user id on the pooled connection afterwards", async () => {
+    const one = new pg.Pool({ ...(parse(url) as unknown as pg.PoolConfig), user: "feista_api", password: "feista-test", max: 1 });
+    try {
+      await asUser(one, A, async (tx) => tx.query("select 1"));
+      const after = (await one.query("select current_user::text u, coalesce(current_setting('app.user_id', true), '') id")).rows[0];
+      expect(after).toEqual({ u: "feista_api", id: "" });
+      await expect(asUser(one, A, async () => { throw new Error("boom"); })).rejects.toThrow("boom");
+      expect((await one.query("select current_user::text u")).rows[0].u).toBe("feista_api");
+    } finally {
+      await one.end();
+    }
+  });
+});
+
 describe("projects", () => {
   it("creates, lists and isolates per user", async () => {
     const res = await call(A, "POST", "/v1/projects", story);
@@ -66,6 +81,10 @@ describe("projects", () => {
     for (const bad of [{ ...story, kind: "x" }, { ...story, sceneCount: 0 }, { ...story, title: "" }, { ...story, budgetLimitCents: 1.5 }, { ...story, warnFraction: 0 }, [], "x"])
       expect((await call(A, "POST", "/v1/projects", bad)).status, JSON.stringify(bad)).toBe(400);
     expect((await call(A, "POST", "/v1/projects", { ...story, title: "x".repeat(20_000) })).status).toBe(413);
+    expect((await call(A, "POST", "/v1/projects", { ...story, title: "a\u0000b" })).status).toBe(400);
+  });
+  it("answers 401, not 500, for a signed token whose user does not exist", async () => {
+    expect((await call(randomUUID(), "POST", "/v1/projects", story)).status).toBe(401);
   });
 });
 
@@ -96,6 +115,11 @@ describe("credentials (BYOK)", () => {
     expect(await loadSecret(pool, ring, A, "fal")).toBe(next);
     const rows = (await admin.query("select length(ciphertext) n, revoked_at from credentials where owner_id = $1 order by created_at", [A])).rows;
     expect(rows.map((r) => [r.n, r.revoked_at !== null])).toEqual([[0, true], [expect.any(Number), false]]);
+  });
+  it("concurrent adds for one provider all succeed and leave one active key", async () => {
+    const res = await Promise.all(Array.from({ length: 6 }, (_, i) => call(B, "POST", "/v1/credentials", { provider: "elevenlabs", secret: `xi_key_${i}_abcdefghijklmnop` })));
+    expect(res.map((r) => r.status)).toEqual(Array(6).fill(201));
+    expect((await admin.query("select count(*)::int n from credentials where owner_id = $1 and revoked_at is null", [B])).rows[0].n).toBe(1);
   });
   it("delete revokes", async () => {
     const id = ((await (await call(A, "GET", "/v1/credentials")).json()) as { credentials: { id: string }[] }).credentials[0]!.id;
