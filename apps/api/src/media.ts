@@ -35,26 +35,26 @@ export function childEnv(from: NodeJS.ProcessEnv = process.env): NodeJS.ProcessE
 const keyOf = (ctx: StageContext, rel: string) => `${ctx.projectId}/${ctx.nodeId}/g${ctx.generation}/${rel}`;
 
 /** Current-generation assets of every completed node in the project (what this run builds on). */
-async function inputs(deps: MediaDeps, projectId: string) {
+export async function inputs(deps: Pick<MediaDeps, "pool">, projectId: string) {
   return asWorker(deps.pool, async (tx) =>
     (await tx.query(
-      `select a.node_id, a.storage_key from assets a
+      `select a.node_id, a.storage_key, a.source_url from assets a
        join stage_runs s on s.project_id = a.project_id and s.node_id = a.node_id and s.generation = a.generation
        where a.project_id = $1 and s.status = 'completed'`,
       [projectId],
-    )).rows as { node_id: string; storage_key: string }[],
+    )).rows as { node_id: string; storage_key: string; source_url: string | null }[],
   );
 }
 
-export async function storeOutput(deps: MediaDeps, ctx: StageContext, rel: string, file: string, kind: string, mime: string) {
+export async function storeOutput(deps: Pick<MediaDeps, "pool" | "storage">, ctx: StageContext, rel: string, file: string, kind: string, mime: string, sourceUrl?: string) {
   const key = keyOf(ctx, rel);
   await deps.storage.put(key, file);
   const bytes = (await stat(file)).size;
   await asWorker(deps.pool, (tx) =>
     tx.query(
-      `insert into assets (project_id, node_id, generation, kind, storage_key, mime, bytes) values ($1, $2, $3, $4, $5, $6, $7)
-       on conflict (storage_key) do update set bytes = excluded.bytes`, // a retry of the same generation overwrites its own output
-      [ctx.projectId, ctx.nodeId, ctx.generation, kind, key, mime, bytes],
+      `insert into assets (project_id, node_id, generation, kind, storage_key, mime, bytes, source_url) values ($1, $2, $3, $4, $5, $6, $7, $8)
+       on conflict (storage_key) do update set bytes = excluded.bytes, source_url = excluded.source_url`, // a retry of the same generation overwrites its own output
+      [ctx.projectId, ctx.nodeId, ctx.generation, kind, key, mime, bytes, sourceUrl ?? null],
     ),
   );
 }

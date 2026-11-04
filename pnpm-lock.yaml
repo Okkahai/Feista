@@ -13,6 +13,9 @@ importers:
       '@feista/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@feista/providers':
+        specifier: workspace:*
+        version: link:../../packages/providers
       '@feista/vault':
         specifier: workspace:*
         version: link:../../packages/vault
