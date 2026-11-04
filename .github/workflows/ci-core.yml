@@ -12,5 +12,5 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @feista/core typecheck
-      - run: pnpm --filter @feista/core test
+      - run: pnpm --filter './packages/*' typecheck
+      - run: pnpm --filter './packages/*' test
