@@ -113,4 +113,31 @@ do $$ begin
   exception when insufficient_privilege then null; end;
 end $$;
 reset session authorization;
+
+-- the runner's worker role sees queue rows across tenants but never key material or users
+set session authorization feista_runner;
+set role feista_worker;
+do $$ begin
+  if (select count(*) from stage_runs) < 1 then raise exception 'worker cannot see runs'; end if;
+  begin
+    perform count(*) from credentials;
+    raise exception 'worker can read credentials';
+  exception when insufficient_privilege then null; end;
+  begin
+    perform count(*) from users;
+    raise exception 'worker can read users';
+  exception when insufficient_privilege then null; end;
+  begin
+    update projects set title = 'x';
+    raise exception 'worker can modify projects';
+  exception when insufficient_privilege then null; end;
+end $$;
+reset role;
+do $$ begin
+  begin
+    perform count(*) from stage_runs;
+    raise exception 'feista_runner has privileges of its own';
+  exception when insufficient_privilege then null; end;
+end $$;
+reset session authorization;
 \echo RLS_TESTS_PASSED

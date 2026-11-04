@@ -10,6 +10,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@feista/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@feista/vault':
         specifier: workspace:*
         version: link:../../packages/vault
