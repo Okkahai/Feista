@@ -1,0 +1,24 @@
+name: ci-api
+on:
+  pull_request:
+    paths: ["apps/api/**", "packages/**", "db/**", "pnpm-lock.yaml", ".github/workflows/ci-api.yml"]
+  push:
+    branches: [develop, main]
+jobs:
+  api:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: ci }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @feista/api typecheck
+      - run: pnpm --filter @feista/api test
+        env: { DATABASE_URL: "postgresql://postgres:ci@localhost:5432/postgres" }
