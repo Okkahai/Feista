@@ -18,6 +18,8 @@ const MODEL = new RegExp(`^${SEG}(?:/${SEG}){1,4}$`);
 const VIDEO_PER_SECOND: Record<string, Record<string, number>> = {
   "bytedance/seedance-2.0/text-to-video": { "720p": 30.34, "1080p": 68.2 }, // with audio
   "bytedance/seedance-2.0/fast/text-to-video": { "720p": 24.19 },
+  // checked 2026-11-04; the page's pricing box also says 30.24c/s: reserve the higher figure
+  "bytedance/seedance-2.0/image-to-video": { "720p": 30.34, "1080p": 68.2 },
 };
 const IMAGE: Record<string, { base: number; resolution: Record<string, number>; webSearch: number }> = {
   "fal-ai/nano-banana-2": { base: 8, resolution: { "1K": 1, "2K": 1.5, "4K": 2 }, webSearch: 1.5 },
@@ -59,6 +61,7 @@ export function falAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
       name: "fal.ai",
       capabilities: ["image.generate", "video.text_to_video", "video.image_to_video"],
       models: [
+        { id: "bytedance/seedance-2.0/image-to-video", capability: "video.image_to_video", label: "Seedance 2.0 (from keyframe)", pricing: { unit: "second", cents: 30.34, checkedAt: "2026-11-04", note: "720p; 1080p 68.2c/s" } },
         { id: "bytedance/seedance-2.0/text-to-video", capability: "video.text_to_video", label: "Seedance 2.0", pricing: { unit: "second", cents: 30.34, checkedAt: "2026-11-03", note: "720p with audio; 1080p 68.2c/s" } },
         { id: "fal-ai/nano-banana-2", capability: "image.generate", label: "Nano Banana 2", pricing: { unit: "image", cents: 8, checkedAt: "2026-11-03" } },
       ],

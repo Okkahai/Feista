@@ -32,13 +32,19 @@ export interface StageContext {
   /** Outputs of this run are stored under this generation (a new take bumps it). */
   generation: number;
   idempotencyKey: string;
+  /** projects.config: the owner's per-project settings (e.g. their TTS plan rate). Untrusted shape. */
+  projectConfig: Record<string, unknown>;
+  /** A provider job this node already submitted (survives crashes and retries, cleared by a new take). */
+  externalId?: string;
+  /** Persist (or clear) the provider job id under our lease, before waiting on it, so a restart re-attaches instead of paying again. */
+  setExternalId(id: string | null): Promise<void>;
   /** The project owner's own provider key (BYOK). Server-side only; never log it. */
   secret(provider: string): Promise<string>;
 }
 
 export interface StageHandler {
   /** Required for paid stages: the run is budget-checked against this before it starts. */
-  estimate?: (ctx: StageContext) => { provider: string; cents: number };
+  estimate?: (ctx: StageContext) => { provider: string; cents: number } | undefined | Promise<{ provider: string; cents: number } | undefined>;
   run(ctx: StageContext): Promise<{ reportedCents?: number } | void>;
   leaseMs?: number;
 }
@@ -67,6 +73,7 @@ interface Row {
   lease_losses: number;
   max_lease_losses: number;
   lease_until: Date | null;
+  external_id: string | null;
   spend_pending_cents: number | null;
   spend_approved_cents: number | null;
   error: string | null;
@@ -94,7 +101,7 @@ async function save(
 ): Promise<boolean> {
   const r = await tx.query(
     `update stage_runs set status = $3, generation = $4, attempt = $5, lease_losses = $6, error = $7,
-       lease_until = null, run_after = now() + make_interval(secs => $8::double precision / 1000),
+       lease_until = null, external_id = case when generation <> $4 then null else external_id end, run_after = now() + make_interval(secs => $8::double precision / 1000),
        spend_pending_cents = case when $10 then $11 else spend_pending_cents end,
        spend_approved_cents = case when $10 then $12 else spend_approved_cents end, updated_at = now()
      where project_id = $1 and node_id = $2 and ($9::timestamptz is null or (status = 'running' and lease_until = $9))`,
@@ -133,6 +140,14 @@ export async function runOnce(deps: RunnerDeps): Promise<boolean> {
   const stages = Object.keys(handlers).filter((s) => handlers[s]);
   if (stages.length === 0) return false;
   const opened: string[] = []; // keys decrypted for this job, redacted verbatim from any error
+  let fence: Date | undefined; // the lease we hold once claimed; the heartbeat moves it
+  // lease renewals and external_id writes both match on `fence`, so they run one at a time
+  let leaseOps: Promise<unknown> = Promise.resolve();
+  const onLease = <T>(fn: () => Promise<T>): Promise<T> => {
+    const next = leaseOps.then(fn);
+    leaseOps = next.catch(() => {});
+    return next;
+  };
 
   const claimed = await asWorker(pool, async (tx) => {
     const r = (await tx.query(
@@ -154,7 +169,7 @@ export async function runOnce(deps: RunnerDeps): Promise<boolean> {
         [r.project_id, r.node_id, leaseMs],
       )).rows[0].lease_until;
     }
-    const proj = (await tx.query("select owner_id, budget_limit_cents, approval_threshold_cents, warn_fraction from projects where id = $1", [r.project_id])).rows[0];
+    const proj = (await tx.query("select owner_id, config, budget_limit_cents, approval_threshold_cents, warn_fraction from projects where id = $1", [r.project_id])).rows[0];
     const ctx: StageContext = {
       projectId: r.project_id,
       ownerId: proj.owner_id,
@@ -162,13 +177,23 @@ export async function runOnce(deps: RunnerDeps): Promise<boolean> {
       ...(r.node_id.includes(":") ? { scene: Number(r.node_id.split(":")[1]) } : {}),
       generation: r.generation,
       idempotencyKey: idempotencyKey(r.project_id, { nodeId: r.node_id, generation: r.generation, attempt: r.attempt }, "v1"),
+      projectConfig: proj.config ?? {},
+      ...(r.external_id ? { externalId: r.external_id } : {}),
+      setExternalId: async (id) => {
+        const u = await onLease(() => asWorker(pool, (t) =>
+          t.query("update stage_runs set external_id = $3 where project_id = $1 and node_id = $2 and status = 'running' and lease_until = $4", [r.project_id, r.node_id, id, fence]),
+        ));
+        if (u.rowCount !== 1) throw new Error("lease lost while recording the provider job id");
+      },
       secret: async (provider) => {
         const k = await loadSecret(pool, ring, proj.owner_id, provider);
         opened.push(k);
         return k;
       },
     };
-    if (STAGE.get(stageOf(r.node_id))?.paid) {
+    // a node re-attaching to a submitted job already spent its reservation: gating it again could only
+    // park or fail work that is paid for (and an approval's new take would then submit it twice)
+    if (STAGE.get(stageOf(r.node_id))?.paid && !r.external_id) {
       const run = toRun(r);
       const fail = async (why: string) => {
         await save(tx, r.project_id, transition(run, "failed", new Date(), why));
@@ -179,7 +204,7 @@ export async function runOnce(deps: RunnerDeps): Promise<boolean> {
       let est: { provider: string; cents: number } | undefined;
       let d: SpendDecision;
       try {
-        est = handler.estimate?.(ctx);
+        est = await handler.estimate?.(ctx);
         if (!est) return await fail("paid stage has no cost estimate"); // fail closed
         // this node's own unreported reservation (an earlier attempt) is replaced below, not counted twice
         const ledger = (await tx.query(
@@ -212,19 +237,18 @@ export async function runOnce(deps: RunnerDeps): Promise<boolean> {
   if (claimed === "gated") return true; // progress: the node was failed or parked for approval
 
   const { row, handler, ctx, leaseMs } = claimed;
-  let fence = row.lease_until!;
+  fence = row.lease_until!;
   // heartbeat: extend our lease while the handler runs, so a long job is not reaped and run twice
   let renewing: Promise<unknown> | undefined;
   const beat = setInterval(() => {
     if (renewing) return; // one renewal at a time
-    renewing = asWorker(pool, (tx) =>
+    renewing = onLease(() => asWorker(pool, (tx) =>
       tx.query(
         `update stage_runs set lease_until = date_trunc('milliseconds', now() + make_interval(secs => $4::double precision / 1000))
          where project_id = $1 and node_id = $2 and status = 'running' and lease_until = $3 returning lease_until`,
         [row.project_id, row.node_id, fence, leaseMs],
       ),
-    )
-      .then((r) => { if (r.rows[0]) fence = r.rows[0].lease_until; })
+    ).then((r) => { if (r.rows[0]) fence = r.rows[0].lease_until; }))
       .catch((e) => log(`lease renewal failed: ${redact(String(e), opened)}`))
       .finally(() => (renewing = undefined));
   }, Math.max(10, Math.floor(leaseMs / 3)));
@@ -232,6 +256,7 @@ export async function runOnce(deps: RunnerDeps): Promise<boolean> {
   const stopBeat = async () => {
     clearInterval(beat);
     await renewing;
+    await leaseOps; // an external_id write in flight still holds the old fence
   };
 
   let out: { reportedCents?: number } | void;
@@ -243,10 +268,10 @@ export async function runOnce(deps: RunnerDeps): Promise<boolean> {
     log(`${row.project_id} ${row.node_id} failed: ${msg}`);
     await asWorker(pool, async (tx) => {
       const failed = transition(toRun(row), "failed", new Date(), msg);
-      if (e instanceof PermanentError || blockedReason(failed, "queued")) await save(tx, row.project_id, failed, { fence });
+      if (e instanceof PermanentError || blockedReason(failed, "queued")) await save(tx, row.project_id, failed, { fence: fence! });
       else {
         const retry = transition(failed, "queued", new Date());
-        await save(tx, row.project_id, retry, { fence, runAfterMs: delayMs(retry.attempt) });
+        await save(tx, row.project_id, retry, { fence: fence!, runAfterMs: delayMs(retry.attempt) });
       }
     });
     return true;
@@ -258,7 +283,7 @@ export async function runOnce(deps: RunnerDeps): Promise<boolean> {
     const reported = out?.reportedCents;
     if (reported !== undefined && !(Number.isInteger(reported) && reported >= 0)) throw new Error(`handler reported invalid cost ${String(reported)}`);
     await asWorker(pool, async (tx) => {
-      if (!(await save(tx, row.project_id, transition(toRun(row), "completed", new Date()), { fence, spend: { pending: null, approved: null } }))) return; // lease lost meanwhile
+      if (!(await save(tx, row.project_id, transition(toRun(row), "completed", new Date()), { fence: fence!, spend: { pending: null, approved: null } }))) return; // lease lost meanwhile
       if (reported !== undefined) {
         await tx.query(
           `update ledger set reported_cents = $3 where id = (select id from ledger where project_id = $1 and node_id = $2
@@ -272,7 +297,7 @@ export async function runOnce(deps: RunnerDeps): Promise<boolean> {
     const msg = `completed at the provider, but recording it failed: ${redact(e instanceof Error ? e.message : String(e), opened).slice(0, 300)}`;
     log(`${row.project_id} ${row.node_id}: ${msg}`);
     // park as failed (needs a person), never back to queued: the reservation stays counted
-    await asWorker(pool, (tx) => save(tx, row.project_id, transition(toRun(row), "failed", new Date(), msg), { fence })).catch((e2) =>
+    await asWorker(pool, (tx) => save(tx, row.project_id, transition(toRun(row), "failed", new Date(), msg), { fence: fence! })).catch((e2) =>
       log(`could not mark ${row.node_id} failed: ${redact(String(e2), opened)}`),
     );
   }
