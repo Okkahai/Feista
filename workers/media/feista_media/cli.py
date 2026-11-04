@@ -6,6 +6,11 @@ from pathlib import Path
 from .assemble import build_short
 from .qa import check, probe
 
+# Exit codes the runner relies on: 1 = QA failed, 2 = bad input (both permanent), 75 = transient (retry).
+EXIT_QA_FAILED = 1
+EXIT_BAD_INPUT = 2
+EXIT_TEMPFAIL = 75
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(prog="feista-media")
@@ -18,13 +23,24 @@ def main() -> int:
     q.add_argument("video", type=Path)
     a = ap.parse_args()
     if a.cmd == "assemble":
-        plan = build_short(a.episode_dir, a.work, a.out)
+        try:
+            plan = build_short(a.episode_dir, a.work, a.out)
+        except (ValueError, KeyError, FileNotFoundError, json.JSONDecodeError) as e:
+            print(json.dumps({"error": f"bad episode input: {e!r}"}))
+            return EXIT_BAD_INPUT
+        except Exception as e:  # noqa: BLE001 - ffmpeg crash, OOM, disk full, model download: worth a retry
+            print(json.dumps({"error": f"transient: {e!r}"}))
+            return EXIT_TEMPFAIL
         print(json.dumps({"total": plan.total, "starts": plan.starts}))
         return 0
-    rep = probe(a.video)
+    try:
+        rep = probe(a.video)
+    except Exception as e:  # noqa: BLE001 - probe failures are not QA verdicts: retry
+        print(json.dumps({"error": f"transient: {e!r}"}))
+        return EXIT_TEMPFAIL
     fails = check(rep)
     print(json.dumps({"report": json.loads(rep.to_json()), "failures": fails}))
-    return 1 if fails else 0
+    return EXIT_QA_FAILED if fails else 0
 
 
 if __name__ == "__main__":

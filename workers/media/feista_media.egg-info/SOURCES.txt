@@ -1,3 +1,4 @@
+README.md
 pyproject.toml
 feista_media/__init__.py
 feista_media/assemble.py
@@ -10,3 +11,4 @@ feista_media.egg-info/dependency_links.txt
 feista_media.egg-info/entry_points.txt
 feista_media.egg-info/requires.txt
 feista_media.egg-info/top_level.txt
+tests/test_media.py
