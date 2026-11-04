@@ -17,4 +17,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: db/tests/run.sh
-        env: { DATABASE_URL: "postgresql://postgres:ci@localhost:5432/postgres" }
+        env: { DATABASE_URL: "postgresql://postgres:ci@localhost:5432/postgres", FEISTA_DISPOSABLE_DB: "1" }
