@@ -1,0 +1,11 @@
+{
+  "name": "@feista/providers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run", "lint": "tsc --noEmit" },
+  "dependencies": { "@feista/core": "workspace:*" },
+  "devDependencies": { "@types/node": "^22.10.0", "typescript": "^5.9.3", "vitest": "^3.2.4" }
+}
