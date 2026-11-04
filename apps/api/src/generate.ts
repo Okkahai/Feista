@@ -16,6 +16,7 @@ import { pipeline } from "node:stream/promises";
 import type { ProviderAdapter, ProviderRequest, ProviderResult } from "@feista/core";
 import { type Fetch, type Word, elevenLabsAdapter, falAdapter, isFalMedia } from "@feista/providers";
 import type pg from "pg";
+import { asWorker } from "./db";
 import { inputs, storeOutput } from "./media";
 import { PermanentError, type StageContext, type StageHandler } from "./runner";
 import type { Storage } from "./storage";
@@ -32,6 +33,7 @@ export interface GenerateDeps {
 const IMAGE_MODEL = "fal-ai/nano-banana-2";
 const VIDEO_MODEL = "bytedance/seedance-2.0/image-to-video";
 const TTS_MODEL = "eleven_multilingual_v2";
+const IMAGE_EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
 const MAX_DOWNLOAD = 300 * 1024 * 1024;
 
 /**
@@ -47,16 +49,29 @@ export async function drive(deps: GenerateDeps, adapter: ProviderAdapter, ctx: S
   };
   let r: ProviderResult = ctx.externalId ? await poll(ctx.externalId) : await adapter.submit({ ...req, idempotencyKey: ctx.idempotencyKey }, pc);
   let jobId = ctx.externalId;
+  // An accepted job whose id we cannot record would be submitted (and billed) again by the retry:
+  // cancel it best-effort and park the node for a person instead.
+  const record = async (id: string) => {
+    for (let i = 0; ; i++) {
+      try {
+        return await ctx.setExternalId(id);
+      } catch (e) {
+        if (i < 2) { await sleep(500 * (i + 1)); continue; }
+        await adapter.cancel?.(id, pc).catch(() => {});
+        throw new PermanentError(`${adapter.manifest.id} accepted job ${id} but recording it failed (${e instanceof Error ? e.message : "error"}); cancel requested, check the provider before retrying`);
+      }
+    }
+  };
   const deadline = Date.now() + maxWaitMs;
   while (r.state === "pending") {
-    if (r.externalId !== jobId) await ctx.setExternalId((jobId = r.externalId));
+    if (r.externalId !== jobId) await record((jobId = r.externalId));
     if (Date.now() > deadline) throw new Error(`${adapter.manifest.id} job still running after ${maxWaitMs} ms; a retry re-attaches to it`);
     await sleep(Math.min(Math.max(r.pollAfterMs, 1000), 60_000));
     r = await poll(r.externalId);
   }
   if (r.state === "error") {
-    // a job that failed at the provider is dead: the next take submits afresh. A transient poll error keeps the id.
-    if (jobId && !r.retryable) await ctx.setExternalId(null);
+    // the job id is kept even when this looks fatal (a rotated key, a billed job without output): a retry
+    // re-attaches rather than paying again. Only a new take clears it (runner save()).
     throw r.retryable ? new Error(r.message) : new PermanentError(r.message);
   }
   return r;
@@ -144,7 +159,8 @@ export function generateHandlers(deps: GenerateDeps): Record<"keyframe" | "scene
         const s = scene(await plan(deps, ctx), ctx);
         const r = await drive(deps, fal, ctx, { modelId: IMAGE_MODEL, capability: "image.generate", input: imageInput(s) });
         const img = r.outputs[0]!;
-        const ext = img.mime === "image/jpeg" ? "jpg" : img.mime === "image/webp" ? "webp" : "png";
+        const ext = IMAGE_EXT[img.mime]; // the stored mime is served later: never trust html/svg from a provider
+        if (!ext) throw new PermanentError(`fal returned an unsupported image type ${img.mime.slice(0, 40)}`);
         await withTemp(async (dir) => {
           await download(fetchImpl, img.url, join(dir, "k"));
           await storeOutput(deps, ctx, `keyframes/K${ctx.scene! + 1}.${ext}`, join(dir, "k"), "image", img.mime, img.url);
@@ -181,15 +197,25 @@ export function generateHandlers(deps: GenerateDeps): Record<"keyframe" | "scene
         if (typeof p.voice_id !== "string") throw new PermanentError("config.json has no voice_id");
         const adapter = tts(ctx);
         const words: Record<string, Word[]> = {};
-        // shortcut: a retry after a mid-loop failure re-speaks (and re-bills) earlier lines; skip stored lines if that shows up in practice
+        // lines already spoken in this take (an earlier attempt) are reused, never re-billed
+        const have = new Set((await asWorker(deps.pool, (tx) => tx.query(
+          "select storage_key from assets where project_id = $1 and node_id = $2 and generation = $3", [ctx.projectId, ctx.nodeId, ctx.generation],
+        ))).rows.map((a) => (a.storage_key as string).split("/").slice(3).join("/")));
         await withTemp(async (dir) => {
           for (const [n, text] of lines(p)) {
+            const timingKey = `${ctx.projectId}/${ctx.nodeId}/g${ctx.generation}/vo/timing/L${n}.json`;
+            if (have.has(`vo/L${n}.mp3`) && have.has(`vo/timing/L${n}.json`)) {
+              await deps.storage.get(timingKey, join(dir, `L${n}.json`));
+              words[n] = JSON.parse(await readFile(join(dir, `L${n}.json`), "utf8")) as Word[];
+              continue;
+            }
             const r = await drive(deps, adapter, ctx, { modelId: TTS_MODEL, capability: "audio.tts", input: { text, voice_id: p.voice_id } });
             const [audio, timing] = r.outputs;
             if (!audio || !timing) throw new PermanentError("elevenlabs returned no audio or timing");
             await download(fetchImpl, audio.url, join(dir, `L${n}.mp3`));
             await storeOutput(deps, ctx, `vo/L${n}.mp3`, join(dir, `L${n}.mp3`), "audio", "audio/mpeg");
             await download(fetchImpl, timing.url, join(dir, `L${n}.json`));
+            await storeOutput(deps, ctx, `vo/timing/L${n}.json`, join(dir, `L${n}.json`), "other", "application/json");
             words[n] = JSON.parse(await readFile(join(dir, `L${n}.json`), "utf8")) as Word[];
           }
           await writeFile(join(dir, "words.json"), JSON.stringify(words));

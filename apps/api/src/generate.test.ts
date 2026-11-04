@@ -37,7 +37,7 @@ const PLAN = {
 };
 
 /** Fake fal + ElevenLabs. `statusSeq` is what successive status polls of one job report. */
-function fakeProviders(opts: { statusSeq?: string[]; failJob?: boolean } = {}) {
+function fakeProviders(opts: { statusSeq?: string[]; failJob?: boolean; onSubmit?: () => Promise<void>; ttsFailOnce?: string } = {}) {
   const calls: { method: string; url: string; auth: string | undefined; body?: unknown; redirect?: string | undefined }[] = [];
   const polls = new Map<string, number>();
   const seenExternal: (string | null)[] = [];
@@ -47,8 +47,11 @@ function fakeProviders(opts: { statusSeq?: string[]; failJob?: boolean } = {}) {
     const h = (init.headers ?? {}) as Record<string, string>;
     calls.push({ method: init.method ?? "GET", url: u, auth: h.authorization ?? h["xi-api-key"], ...(init.body ? { body: JSON.parse(String(init.body)) } : {}), redirect: init.redirect });
     let m: RegExpExecArray | null;
-    if ((m = /^https:\/\/queue\.fal\.run\/(fal-ai\/nano-banana-2|bytedance\/seedance-2\.0\/image-to-video)$/.exec(u)) && init.method === "POST")
+    if ((m = /^https:\/\/queue\.fal\.run\/(fal-ai\/nano-banana-2|bytedance\/seedance-2\.0\/image-to-video)$/.exec(u)) && init.method === "POST") {
+      await opts.onSubmit?.();
       return json({ request_id: `${m[1]!.startsWith("fal-ai") ? "img" : "vid"}-${calls.length}` });
+    }
+    if (/\/cancel$/.test(u) && init.method === "PUT") return new Response(null, { status: 202 });
     if ((m = /\/requests\/([a-z]+-\d+)\/status$/.exec(u))) {
       const n = (polls.get(m[1]!) ?? 0) + 1;
       polls.set(m[1]!, n);
@@ -62,6 +65,10 @@ function fakeProviders(opts: { statusSeq?: string[]; failJob?: boolean } = {}) {
     if (u.startsWith("https://v3.fal.media/files/")) return new Response(`bytes of ${u}`);
     if (u.startsWith("https://api.elevenlabs.io/")) {
       const text = (JSON.parse(String(init.body)) as { text: string }).text;
+      if (text === opts.ttsFailOnce) {
+        delete opts.ttsFailOnce;
+        return new Response("rate limited", { status: 429 });
+      }
       return json({
         audio_base64: Buffer.from(`mp3:${text}`).toString("base64"),
         alignment: { characters: [...text], character_start_times_seconds: [...text].map((_, i) => i / 10), character_end_times_seconds: [...text].map((_, i) => (i + 1) / 10) },
@@ -177,10 +184,30 @@ describe("generation stages (mocked providers)", () => {
     const pid = await project();
     await drain(stubs); // keyframe:0 now queued
     await admin.query("update stage_runs set external_id = 'fal-ai/nano-banana-2#img-77' where project_id = $1 and node_id = 'keyframe:0'", [pid]);
+    await admin.query("update projects set budget_limit_cents = 0 where id = $1", [pid]); // the job is already paid for: no second budget gate
     await drain({ keyframe: gen(p).keyframe });
     expect((await runsOf(pid))["keyframe:0"]).toMatchObject({ status: "completed" });
     expect(p.calls.filter((c) => c.method === "POST")).toHaveLength(0);
     expect(p.calls[0]!.url).toBe("https://queue.fal.run/fal-ai/nano-banana-2/requests/img-77/status");
+  });
+
+  it("an accepted job whose id cannot be recorded is cancelled and parked, never resubmitted", async () => {
+    let pid = "";
+    // another worker steals the lease right after fal accepts, so the id write matches no row
+    const p = fakeProviders({ onSubmit: async () => void (await admin.query("update stage_runs set lease_until = now() + interval '1 hour' where project_id = $1 and node_id = 'keyframe:0'", [pid])) });
+    pid = await project();
+    await drain({ ...stubs, keyframe: gen(p).keyframe });
+    expect(p.calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(p.calls.filter((c) => c.method === "PUT").map((c) => c.url)).toEqual([expect.stringMatching(/\/requests\/img-\d+\/cancel$/)]);
+  });
+
+  it("a narration retry reuses lines already spoken in this take", async () => {
+    const p = fakeProviders({ ttsFailOnce: "Bye." });
+    const pid = await project({ tts_cents_per_1k_chars: 30 });
+    await drain({ ...stubs, narration: gen(p).narration });
+    expect((await runsOf(pid)).narration).toMatchObject({ status: "completed" });
+    expect(p.calls.filter((c) => c.url.includes("elevenlabs")).map((c) => (c.body as { text: string }).text)).toEqual(["Hi there.", "Bye.", "Bye."]);
+    expect(JSON.parse(readFileSync(join(dir, "store", pid, "narration/g1/vo/words.json"), "utf8"))).toHaveProperty("1", [["Hi", 0, 0.2], ["there.", 0.3, 0.9]]);
   });
 
   it("a new take forgets the previous take's job id", async () => {
@@ -192,11 +219,11 @@ describe("generation stages (mocked providers)", () => {
     expect((await admin.query("select generation, external_id from stage_runs where project_id = $1 and node_id = 'keyframe:0'", [pid])).rows[0]).toEqual({ generation: 2, external_id: null });
   });
 
-  it("a job the provider failed fails the node permanently and forgets the dead job id", async () => {
+  it("a job the provider failed fails the node permanently but keeps its id, so a retry never pays again", async () => {
     const p = fakeProviders({ statusSeq: ["COMPLETED"], failJob: true });
     const pid = await project();
     await drain({ ...stubs, keyframe: gen(p).keyframe });
-    expect((await runsOf(pid))["keyframe:0"]).toMatchObject({ status: "failed", external_id: null, error: expect.stringMatching(/content_policy/) });
+    expect((await runsOf(pid))["keyframe:0"]).toMatchObject({ status: "failed", external_id: expect.stringMatching(/^fal-ai\/nano-banana-2#img-\d+$/), error: expect.stringMatching(/content_policy/) });
     expect(p.calls.filter((c) => c.method === "POST")).toHaveLength(1);
   });
 

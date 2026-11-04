@@ -191,7 +191,9 @@ export async function runOnce(deps: RunnerDeps): Promise<boolean> {
         return k;
       },
     };
-    if (STAGE.get(stageOf(r.node_id))?.paid) {
+    // a node re-attaching to a submitted job already spent its reservation: gating it again could only
+    // park or fail work that is paid for (and an approval's new take would then submit it twice)
+    if (STAGE.get(stageOf(r.node_id))?.paid && !r.external_id) {
       const run = toRun(r);
       const fail = async (why: string) => {
         await save(tx, r.project_id, transition(run, "failed", new Date(), why));
