@@ -29,6 +29,8 @@ export interface StageContext {
   ownerId: string;
   nodeId: string;
   scene?: number;
+  /** Outputs of this run are stored under this generation (a new take bumps it). */
+  generation: number;
   idempotencyKey: string;
   /** The project owner's own provider key (BYOK). Server-side only; never log it. */
   secret(provider: string): Promise<string>;
@@ -158,6 +160,7 @@ export async function runOnce(deps: RunnerDeps): Promise<boolean> {
       ownerId: proj.owner_id,
       nodeId: r.node_id,
       ...(r.node_id.includes(":") ? { scene: Number(r.node_id.split(":")[1]) } : {}),
+      generation: r.generation,
       idempotencyKey: idempotencyKey(r.project_id, { nodeId: r.node_id, generation: r.generation, attempt: r.attempt }, "v1"),
       secret: async (provider) => {
         const k = await loadSecret(pool, ring, proj.owner_id, provider);

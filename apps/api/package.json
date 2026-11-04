@@ -7,7 +7,8 @@
     "typecheck": "tsc --noEmit",
     "test": "../../db/with-temp-db.sh vitest run --no-file-parallelism",
     "lint": "tsc --noEmit",
-    "dev": "tsx watch src/server.ts"
+    "dev": "tsx watch src/server.ts",
+    "runner": "tsx src/runner-main.ts"
   },
   "dependencies": {
     "@feista/core": "workspace:*",

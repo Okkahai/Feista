@@ -1,7 +1,7 @@
 name: ci-api
 on:
   pull_request:
-    paths: ["apps/api/**", "packages/**", "db/**", "pnpm-lock.yaml", ".github/workflows/ci-api.yml"]
+    paths: ["apps/api/**", "packages/**", "db/**", "workers/media/**", "pnpm-lock.yaml", ".github/workflows/ci-api.yml"]
   push:
     branches: [develop, main]
 jobs:
@@ -15,6 +15,9 @@ jobs:
         options: --health-cmd pg_isready --health-interval 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }

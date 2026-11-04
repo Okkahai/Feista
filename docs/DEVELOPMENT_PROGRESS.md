@@ -15,6 +15,9 @@ _Last updated 2026-11-04._ Status words: planned · implemented · mocked · tes
 
 - Story job runner (`apps/api/src/runner.ts`, migration 0002): `stage_runs` is the queue; DAG advance on completion (serialized per project), retries with backoff via core `transition`, lease reaping with fencing, budget gate before every paid stage (deny / park for approval / fail closed without an estimate, ledger reservation then reported cost), review + spend approval endpoint, handlers get the owner's own BYOK key. **Tested locally** with fake handlers (7 runner tests). No real stage handlers yet.
 
+- Media stages on the runner (`apps/api/src/media.ts`, `runner-main.ts`): `assembly` gathers the current-generation outputs of completed nodes into the episode layout and runs the `feista_media` port; `media_qa` checks the final against the delivery spec and fails permanently on a miss. Local directory storage (shortcut until MinIO/R2). **Tested locally** with real FFmpeg on synthetic media through the queue (pass + QA-fail cases). Runner process exists (`pnpm --filter @feista/api runner`) but only media stages have handlers; paid stages wait for provider adapters.
+- Known accepted gaps from the runner review: a retry replaces the node's unreported reservation, so a provider that still charged a failed attempt is undercounted by at most one estimate per lost attempt; a DB error inside the budget check rolls the claim back and re-queues the node.
+
 ## Review follow-ups (accepted, not done)
 - Design pass items in `DESIGN_SYSTEM.md` → "Open critique".
 - Create form duration range (30–90 s) vs repo (15–180 s): pick one source of truth when the API exists.
@@ -23,7 +26,7 @@ _Last updated 2026-11-04._ Status words: planned · implemented · mocked · tes
 - No automated parity test against the original `build_short.py` (manual regression only).
 
 ## Next (in order)
-1. Runner process entry + real handlers: media worker for `assembly`/`media_qa` (Python, via the same queue), MinIO uploads with server-generated keys; new-take invalidation (`invalidated()`) endpoint.
+1. Provider adapters as runner handlers (fal, ElevenLabs, LLM) on recorded fixtures; S3 storage (MinIO locally) replacing the local-dir shortcut; new-take invalidation (`invalidated()`) endpoint.
 2. Real auth (Supabase Auth JWT or self-hosted equivalent) replacing the dev-token stub; user provisioning path.
 3. Provider adapters (fal, ElevenLabs, Anthropic, Higgsfield) with contract tests on recorded fixtures — live smoke tests only after Gün approves a small budget.
 4. Mobile ↔ API wiring, push notifications.
