@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "../../db/with-temp-db.sh vitest run",
+    "test": "../../db/with-temp-db.sh vitest run --no-file-parallelism",
     "lint": "tsc --noEmit",
     "dev": "tsx watch src/server.ts"
   },
   "dependencies": {
+    "@feista/core": "workspace:*",
     "@feista/vault": "workspace:*",
     "@hono/node-server": "^1.14.0",
     "hono": "^4.7.0",

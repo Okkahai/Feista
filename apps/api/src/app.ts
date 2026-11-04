@@ -3,9 +3,12 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import type pg from "pg";
-import { type KeyRing, open, redact, seal } from "@feista/vault";
+import { type KeyRing, redact, seal } from "@feista/vault";
 import type { Authenticate } from "./auth";
 import { asUser } from "./db";
+import { advance, approve } from "./runner";
+
+export { loadSecret } from "./db";
 
 export interface Deps {
   pool: pg.Pool;
@@ -81,14 +84,35 @@ export function createApp({ pool, ring, authenticate, log = console.error }: Dep
     const threshold = int(b.approvalThresholdCents, "approvalThresholdCents", 0, 10_000_000);
     const warn = b.warnFraction;
     if (typeof warn !== "number" || !(warn > 0 && warn <= 1)) throw bad("warnFraction must be in (0, 1]");
-    const row = await asUser(pool, c.get("uid"), async (tx) =>
-      (await tx.query(
+    const row = await asUser(pool, c.get("uid"), async (tx) => {
+      const created = (await tx.query(
         `insert into projects (owner_id, kind, title, scene_count, budget_limit_cents, approval_threshold_cents, warn_fraction)
          values (app_user(), $1, $2, $3, $4, $5, $6) returning id, kind, title, scene_count, created_at`,
         [b.kind, title, sceneCount, limit, threshold, warn],
-      )).rows[0],
-    );
+      )).rows[0];
+      await advance(tx, created.id); // queue the root stages
+      return created;
+    });
     return c.json({ project: row }, 201);
+  });
+
+  app.get("/v1/projects/:id/runs", async (c) => {
+    const id = c.req.param("id");
+    if (!UUID.test(id)) throw notFound();
+    const rows = await asUser(pool, c.get("uid"), async (tx) =>
+      (await tx.query("select node_id, status, generation, attempt, error, updated_at from stage_runs where project_id = $1 order by node_id", [id])).rows,
+    );
+    return c.json({ runs: rows });
+  });
+
+  // approve a finished review, or a spend above the per-operation threshold
+  app.post("/v1/projects/:id/runs/:node/approve", async (c) => {
+    const id = c.req.param("id"), node = c.req.param("node");
+    if (!UUID.test(id) || !/^[a-z_]+(:[0-9]+)?$/.test(node)) throw notFound();
+    const out = await asUser(pool, c.get("uid"), (tx) => approve(tx, id, node));
+    if (out === "not_found") throw notFound();
+    if (out === "not_waiting") return c.json({ error: "not awaiting approval" }, 409);
+    return c.body(null, 204);
   });
 
   // ── BYOK credentials: write-only. Responses carry last4 + status, never key material. ──
@@ -146,13 +170,4 @@ async function revoke(tx: pg.PoolClient, where: string, params: unknown[]): Prom
     params,
   );
   return r.rowCount ?? 0;
-}
-
-/** Server-side only (job runner, right before a provider call). Throws if the user has no active key. */
-export async function loadSecret(pool: pg.Pool, ring: KeyRing, uid: string, provider: string): Promise<string> {
-  const row = await asUser(pool, uid, async (tx) =>
-    (await tx.query("select id, ciphertext, wrapped_key, key_version from credentials where provider = $1 and revoked_at is null", [provider])).rows[0],
-  );
-  if (!row) throw new Error(`no active ${provider} credential`);
-  return open(ring, { ciphertext: row.ciphertext, wrappedKey: row.wrapped_key, keyVersion: row.key_version, last4: "" }, { ownerId: uid, provider, credentialId: row.id });
 }

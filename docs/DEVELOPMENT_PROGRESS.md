@@ -13,6 +13,8 @@ _Last updated 2026-11-04._ Status words: planned · implemented · mocked · tes
 - PR #6 `@feista/vault`: AES-256-GCM envelope encryption bound to owner+provider+credential row, KEK rotation by re-wrap, log redaction (linear-time on hostile input). Two review rounds. **Tested locally + CI** (38 tests).
 - `apps/api` (Hono + pg): dev-token auth **stub**, `/v1/projects` (list/get/create), `/v1/credentials` (write-only BYOK keys: add/replace, list last4, revoke + wipe), `loadSecret()` for the job runner, redacted error logs. **Tested locally** against real Postgres as `feista_api` (13 integration tests, incl. pooled-connection scoping and concurrent key adds). Not deployed.
 
+- Story job runner (`apps/api/src/runner.ts`, migration 0002): `stage_runs` is the queue; DAG advance on completion (serialized per project), retries with backoff via core `transition`, lease reaping with fencing, budget gate before every paid stage (deny / park for approval / fail closed without an estimate, ledger reservation then reported cost), review + spend approval endpoint, handlers get the owner's own BYOK key. **Tested locally** with fake handlers (7 runner tests). No real stage handlers yet.
+
 ## Review follow-ups (accepted, not done)
 - Design pass items in `DESIGN_SYSTEM.md` → "Open critique".
 - Create form duration range (30–90 s) vs repo (15–180 s): pick one source of truth when the API exists.
@@ -21,7 +23,7 @@ _Last updated 2026-11-04._ Status words: planned · implemented · mocked · tes
 - No automated parity test against the original `build_short.py` (manual regression only).
 
 ## Next (in order)
-1. pg-boss orchestrator driving `STORY_STAGES` (seed stage_runs on project create); media worker consuming `assembly`/`media_qa` jobs; MinIO uploads with server-generated keys.
+1. Runner process entry + real handlers: media worker for `assembly`/`media_qa` (Python, via the same queue), MinIO uploads with server-generated keys; new-take invalidation (`invalidated()`) endpoint.
 2. Real auth (Supabase Auth JWT or self-hosted equivalent) replacing the dev-token stub; user provisioning path.
 3. Provider adapters (fal, ElevenLabs, Anthropic, Higgsfield) with contract tests on recorded fixtures — live smoke tests only after Gün approves a small budget.
 4. Mobile ↔ API wiring, push notifications.

@@ -31,7 +31,7 @@ Source: `/mnt/project-files/workflow/` (no git repo) + Gün's Windows PC (YouTub
                          │
                          ▼
                  Postgres (Supabase): users, projects, nodes, ledger, credentials(enc)
-                 pg-boss queue (same DB) ◄────────────── provider webhooks (signed)
+                 stage_runs queue (same DB, ADR 13) ◄────────────── provider webhooks (signed)
                          │ jobs
           ┌──────────────┼───────────────────┐
           ▼              ▼                   ▼
