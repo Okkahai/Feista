@@ -37,6 +37,10 @@ const ok = (cents = 10): StageHandler => ({ estimate: () => ({ provider: "fal", 
 const ALL = ["concept", "script", "characters", "keyframe", "scene_video", "narration", "music", "assembly", "media_qa", "metadata", "publish"];
 const handlersAll = (over: Record<string, StageHandler> = {}) => ({ ...Object.fromEntries(ALL.map((s) => [s, ok()])), ...over });
 const deps = (handlers: RunnerDeps["handlers"]): RunnerDeps => ({ pool: runnerPool, ring, handlers, delayMs: () => 0, log: () => {} });
+async function until(cond: () => Promise<boolean> | boolean) {
+  for (let i = 0; i < 200; i++) if (await cond()) return; else await new Promise((r) => setTimeout(r, 10));
+  throw new Error("condition not reached");
+}
 async function drain(d: RunnerDeps, parallel = 1) {
   for (let i = 0; i < 500; i++) if (!(await Promise.all(Array.from({ length: parallel }, () => runOnce(d)))).some(Boolean)) return;
   throw new Error("runner did not go idle");
@@ -117,22 +121,79 @@ describe("runner", () => {
     await drain(d);
     expect(ran).toBe(1);
     expect((await runs(pid)).concept).toBe("completed");
-    const r = (await admin.query("select spend_approved from stage_runs where project_id = $1 and node_id = 'concept'", [pid])).rows[0];
-    expect(r.spend_approved).toBe(false); // approval is not carried into a later new take
+    const r = (await admin.query("select spend_pending_cents, spend_approved_cents from stage_runs where project_id = $1 and node_id = 'concept'", [pid])).rows[0];
+    expect(r).toEqual({ spend_pending_cents: null, spend_approved_cents: null }); // approval is not carried into a later new take
   });
 
-  it("re-queues work whose worker vanished, and a stale worker cannot overwrite it", async () => {
+  it("re-queues work whose worker vanished; the stale worker cannot touch the re-claimed run", async () => {
     const pid = await newProject();
-    let release!: () => void;
-    const hung = new Promise<void>((r) => (release = r));
-    const slow = runOnce(deps({ concept: { estimate: () => ({ provider: "fal", cents: 1 }), leaseMs: 50, run: () => hung } }));
-    await new Promise((r) => setTimeout(r, 150));
+    const gate = () => { let release!: () => void; const p = new Promise<void>((r) => (release = r)); return { p, release }; };
+    const a = gate(), b = gate();
+    let n = 0;
+    const d = deps({ concept: { estimate: () => ({ provider: "fal", cents: 1 }), run: () => (n++ === 0 ? a.p : b.p) } });
+    const stale = runOnce(d);
+    await until(async () => (await runs(pid)).concept === "running");
+    // the worker "dies": its lease runs out without renewal
+    await admin.query("update stage_runs set lease_until = date_trunc('milliseconds', now() - interval '1 second') where project_id = $1", [pid]);
     expect(await reapExpired(runnerPool)).toBe(1);
     expect((await runs(pid)).concept).toBe("queued");
-    release();
-    await slow; // the stale worker finishes: its lease is gone, so nothing changes
-    const r = (await admin.query("select status, lease_losses from stage_runs where project_id = $1", [pid])).rows[0];
-    expect(r).toEqual({ status: "queued", lease_losses: 1 });
+    const fresh = runOnce(d); // another worker re-claims it
+    await until(async () => n === 2);
+    a.release();
+    await stale; // stale finish must not complete the run the fresh worker holds
+    expect((await admin.query("select status, lease_losses from stage_runs where project_id = $1", [pid])).rows[0]).toEqual({ status: "running", lease_losses: 1 });
+    b.release();
+    await fresh;
+    expect((await runs(pid)).concept).toBe("completed");
+  });
+
+  it("renews the lease while a handler runs past it, so the reaper leaves it alone", async () => {
+    const pid = await newProject();
+    let calls = 0;
+    const d = deps({ concept: { estimate: () => ({ provider: "fal", cents: 1 }), leaseMs: 400, run: async () => { calls++; await new Promise((r) => setTimeout(r, 1200)); } } });
+    const job = runOnce(d);
+    for (let i = 0; i < 6; i++) {
+      await new Promise((r) => setTimeout(r, 180));
+      expect(await reapExpired(runnerPool)).toBe(0);
+    }
+    await job;
+    expect(calls).toBe(1);
+    expect((await runs(pid)).concept).toBe("completed");
+  });
+
+  it("parallel paid nodes cannot together exceed the budget, and retries do not re-reserve", async () => {
+    const pid = await newProject({ sceneCount: 3, budgetLimitCents: 25 });
+    await drain(deps({ concept: ok(0), script: ok(0), characters: ok(0) }));
+    let ran = 0;
+    await drain(deps({ keyframe: { estimate: () => ({ provider: "fal", cents: 10 }), run: async () => { ran++; await new Promise((r) => setTimeout(r, 20)); } } }), 3);
+    expect(ran).toBe(2); // 3 x 10c against 25c: the third is denied even when claimed concurrently
+    const flaky = await newProject({ budgetLimitCents: 150 });
+    let tries = 0;
+    await drain(deps({ concept: { estimate: () => ({ provider: "fal", cents: 60 }), run: async () => { if (++tries < 3) throw new Error("503"); } } }));
+    expect(tries).toBe(3); // a 60c estimate retried 3x under a 150c limit is still one reservation
+    expect((await runs(flaky)).concept).toBe("completed");
+    expect((await admin.query("select count(*)::int n, sum(estimated_cents)::int c from ledger where project_id = $1", [flaky])).rows[0]).toEqual({ n: 1, c: 60 });
+    void pid;
+  });
+
+  it("a bad estimate fails only its node; a bookkeeping error after success never re-runs the work", async () => {
+    const bad = await newProject();
+    await drain(deps({ concept: { estimate: () => ({ provider: "fal", cents: 12.5 }), run: async () => {} } }));
+    expect((await admin.query("select status, error from stage_runs where project_id = $1", [bad])).rows[0]).toMatchObject({ status: "failed", error: expect.stringMatching(/budget check failed/) });
+    const pid = await newProject();
+    let calls = 0;
+    await drain(deps({ concept: { estimate: () => ({ provider: "fal", cents: 5 }), run: async () => { calls++; return { reportedCents: -1 }; } } }));
+    expect(calls).toBe(1);
+    expect((await admin.query("select status, error from stage_runs where project_id = $1", [pid])).rows[0]).toMatchObject({ status: "failed", error: expect.stringMatching(/completed at the provider/) });
+  });
+
+  it("redacts the opened key from stored errors even when no pattern matches its shape", async () => {
+    const pid = await newProject();
+    const odd = "zz9-plural-z-alpha-0042";
+    await call("POST", "/v1/credentials", { provider: "oddprov", secret: odd });
+    await drain(deps({ concept: { estimate: () => ({ provider: "oddprov", cents: 1 }), run: async (ctx) => { throw new PermanentError(`rejected ${await ctx.secret("oddprov")}`); } } }));
+    const e = (await admin.query("select error from stage_runs where project_id = $1", [pid])).rows[0].error as string;
+    expect(e).toContain("rejected [REDACTED]");
   });
 
   it("hands handlers the owner's own key, and only that", async () => {
