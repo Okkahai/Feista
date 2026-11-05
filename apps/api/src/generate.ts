@@ -169,7 +169,7 @@ export function generateHandlers(deps: GenerateDeps): Record<"characters" | "key
       return JSON.parse(await readFile(join(dir, "c.json"), "utf8")) as { characters?: { name?: unknown; look?: unknown }[] };
     });
     const cast = (c.characters ?? []).filter((x) => typeof x.name === "string" && typeof x.look === "string").slice(0, 3);
-    if (!cast.length) throw new PermanentError("concept.json has no characters to draw");
+    if (!cast.length) return undefined; // an object or nature story: keyframes go without a sheet
     const style = typeof ctx.projectConfig.style === "string" ? ctx.projectConfig.style.slice(0, 300) : "soft 3D animated film look, warm cinematic lighting";
     return {
       prompt: `Character reference sheet on a plain light background: front, side and back view of each character, full body, consistent proportions. ` +
@@ -193,9 +193,15 @@ export function generateHandlers(deps: GenerateDeps): Record<"characters" | "key
 
   return {
     characters: {
-      estimate: async (ctx) => estimate(fal, await characterInput(ctx), IMAGE_MODEL, "image.generate"),
+      estimate: async (ctx) => {
+        const input = await characterInput(ctx);
+        return input ? estimate(fal, input, IMAGE_MODEL, "image.generate") : { provider: "fal", cents: 0 };
+      },
       run: async (ctx) => {
-        const r = await drive(deps, fal, ctx, { modelId: IMAGE_MODEL, capability: "image.generate", input: await characterInput(ctx) });
+        // re-attaching needs no input (and must not fail on a re-read of the concept after paying)
+        const input = ctx.externalId ? {} : await characterInput(ctx);
+        if (!input) return;
+        const r = await drive(deps, fal, ctx, { modelId: IMAGE_MODEL, capability: "image.generate", input });
         await storeImage(ctx, r.outputs[0]!, "characters/sheet");
         return cost(r.reportedCents);
       },

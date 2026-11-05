@@ -192,6 +192,19 @@ describe("generation stages (mocked providers)", () => {
       .toEqual([{ node_id: "characters", estimated_cents: 8 }, { node_id: "keyframe:0", estimated_cents: 8 }]);
   });
 
+  it("a story without characters skips the sheet and keyframes use plain text-to-image", async () => {
+    const p = fakeProviders();
+    const pid = await project();
+    const conceptFile = join(dir, "concept-empty.json");
+    writeFileSync(conceptFile, JSON.stringify({ title: "t", characters: [] }));
+    const { characters, keyframe } = gen(p);
+    await drain({ ...stubs, concept: free(async (ctx) => storeOutput({ pool, storage }, ctx, "concept.json", conceptFile, "other", "application/json")), characters, keyframe });
+    const st = await runsOf(pid);
+    expect(st.characters).toMatchObject({ status: "completed" });
+    expect(st["keyframe:0"]).toMatchObject({ status: "completed" });
+    expect(p.calls.filter((c) => c.method === "POST").map((c) => c.url)).toEqual(["https://queue.fal.run/fal-ai/nano-banana-2"]);
+  });
+
   it("a run that times out hands the job to the retry, which re-attaches instead of paying again", async () => {
     const p = fakeProviders({ statusSeq: ["IN_PROGRESS", "COMPLETED"] });
     const pid = await project();

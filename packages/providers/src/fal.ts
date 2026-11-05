@@ -66,6 +66,7 @@ export function falAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
         { id: "bytedance/seedance-2.0/image-to-video", capability: "video.image_to_video", label: "Seedance 2.0 (from keyframe)", pricing: { unit: "second", cents: 30.34, checkedAt: "2026-11-04", note: "720p; 1080p 68.2c/s" } },
         { id: "bytedance/seedance-2.0/text-to-video", capability: "video.text_to_video", label: "Seedance 2.0", pricing: { unit: "second", cents: 30.34, checkedAt: "2026-11-03", note: "720p with audio; 1080p 68.2c/s" } },
         { id: "fal-ai/nano-banana-2", capability: "image.generate", label: "Nano Banana 2", pricing: { unit: "image", cents: 8, checkedAt: "2026-11-03" } },
+        { id: "fal-ai/nano-banana-2/edit", capability: "image.generate", label: "Nano Banana 2 (with references)", pricing: { unit: "image", cents: 8, checkedAt: "2026-11-05", note: "1K; same as text-to-image" } },
       ],
       auth: "api_key",
       lifecycle: "poll_or_webhook",
