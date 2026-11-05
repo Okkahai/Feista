@@ -221,8 +221,9 @@ export function toHighlights(json: unknown, count: number, duration: number): { 
   if (!Array.isArray(clips) || clips.length !== count) throw new PermanentError(`highlights answer needs exactly ${count} clips`);
   const out = (clips as Highlight[]).map((c, i) => {
     if (!(Number.isFinite(c.start) && Number.isFinite(c.end) && c.start >= 0 && c.end <= duration + 0.05)) throw new PermanentError(`clip ${i + 1} is outside the ${Math.round(duration)} s recording`);
-    if (!(c.end - c.start >= 15 && c.end - c.start <= 60)) throw new PermanentError(`clip ${i + 1} must run 15-60 s`);
-    return { start: c.start, end: Math.min(c.end, duration), title: String(c.title).slice(0, 100), hook: String(c.hook).slice(0, 300), why: String(c.why).slice(0, 500) };
+    const end = Math.min(c.end, duration);
+    if (!(end - c.start >= 15 && end - c.start <= 60)) throw new PermanentError(`clip ${i + 1} must run 15-60 s`);
+    return { start: c.start, end, title: String(c.title).slice(0, 100), hook: String(c.hook).slice(0, 300), why: String(c.why).slice(0, 500) };
   });
   const sorted = [...out].sort((a, b) => a.start - b.start);
   sorted.slice(1).forEach((c, i) => { if (c.start < sorted[i]!.end) throw new PermanentError("highlight clips overlap"); });
@@ -260,6 +261,8 @@ export function llmHandlers(deps: GenerateDeps): Record<"concept" | "script" | "
 
   const conceptInput = async (ctx: StageContext) => {
     const f = formatOf(ctx);
+    const vid = ctx.projectConfig.voice_id; // checked here, before any paid stage, not first at narration
+    if (vid !== undefined && !(typeof vid === "string" && VOICE_ID.test(vid))) throw new PermanentError("project voice_id must be a voice id (letters, digits, dashes)");
     const cast = maxCast(f, ctx.projectConfig);
     if (cast < f.cast[0]) throw new PermanentError(`${f.name} needs ${f.cast[0]} character voices; the project has ${voicePool(ctx.projectConfig).length}`);
     const p = await project(deps, ctx.projectId);
@@ -294,6 +297,7 @@ export function llmHandlers(deps: GenerateDeps): Record<"concept" | "script" | "
     const p = await project(deps, ctx.projectId);
     const t = (await upstream(deps, ctx, "transcribe", "transcript.json")) as { duration?: number; words?: unknown };
     if (!(Number.isFinite(t.duration) && Number(t.duration) > 0)) throw new PermanentError("transcript has no recording duration");
+    if (p.scene_count * 15 > Number(t.duration)) throw new PermanentError(`${p.scene_count} clips of at least 15 s cannot fit a ${Math.round(Number(t.duration))} s recording`);
     const text = transcriptText(t);
     if (!text) throw new PermanentError("the recording has no speech to pick moments from");
     if (text.length > MAX_TRANSCRIPT) throw new PermanentError(`transcript is ${text.length} chars; split recordings longer than about 3 h`);

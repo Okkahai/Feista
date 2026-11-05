@@ -14,7 +14,7 @@ from .ff import FFPROBE, run
 
 
 def duration(src: Path) -> float:
-    p = subprocess.run([FFPROBE, "-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", str(src)],
+    p = subprocess.run([FFPROBE, "-v", "error", "-show_entries", "format=duration:stream=codec_type,duration", "-of", "json", str(src)],
                        check=False, capture_output=True, text=True)
     if p.returncode != 0:
         raise ValueError(f"not a readable video: {p.stderr[-300:]}")
@@ -22,7 +22,9 @@ def duration(src: Path) -> float:
     kinds = {s.get("codec_type") for s in info.get("streams", [])}
     if not {"video", "audio"} <= kinds:
         raise ValueError("source needs both a video and an audio stream")
-    return float(info["format"]["duration"])
+    # the shortest stream: a clip cut to the longest one would lose its video tail and fade-out
+    lens = [float(x["duration"]) for x in info.get("streams", []) if x.get("codec_type") in ("video", "audio") and x.get("duration")]
+    return min(lens) if lens else float(info["format"]["duration"])
 
 
 def transcribe(src: Path, out: Path, tr: Transcriber) -> dict[str, object]:
@@ -41,7 +43,7 @@ def captions(words: list[Word], start: float, end: float) -> str:
             "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, "
             "MarginL, MarginR, MarginV, Encoding"),
            CAPTION_STYLE, "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
-    mine = [(re.sub(r"[{}\\]", "", str(w[0])).strip(), float(w[1]) - start, float(w[2]) - start)
+    mine = [(re.sub(r"[{}\\\r\n]", " ", str(w[0])).strip(), float(w[1]) - start, float(w[2]) - start)
             for w in words if start <= float(w[1]) < end]
     mine = [w for w in mine if w[0]]
     for k in range(0, len(mine), 2):

@@ -112,11 +112,40 @@ describe("Clip Studio", () => {
     expect(assets.sort()).toEqual(["clip_render:0/g1/clips/C1.mp4", "clip_render:1/g1/clips/C2.mp4"]);
   }, 180_000);
 
-  it("fails permanently, without calling anyone, when no recording was uploaded", async () => {
+  it("fails permanently, without calling anyone, when no recording was uploaded or its rights are missing", async () => {
+    const a = fakeAnthropic(PICKS);
+    const all = { ...clipHandlers({ pool, storage, cmd }), ...llmHandlers({ pool, storage, fetch: a.fetch, sleep: async () => {} }) };
     const pid = ((await (await create({ config: { rights: "licensed" } })).json()) as { project: { id: string } }).project.id;
     await app.request(`/v1/projects/${pid}/runs/source/approve`, { method: "POST", headers: auth });
-    await drain(clipHandlers({ pool, storage, cmd }));
+    // a project that bypassed the API check (e.g. an old row) is still refused by the stage itself
+    const raw = (await admin.query(
+      `insert into projects (owner_id, kind, title, scene_count, budget_limit_cents, approval_threshold_cents, warn_fraction, config)
+       values ($1, 'clip', 'x', 1, 1000, 1000, 0.9, '{}') returning id`, [U])).rows[0].id as string;
+    await storage.put(sourceKey(raw), join(dir, "src", "vod.mp4"));
+    await admin.query("insert into stage_runs (project_id, node_id, status, max_attempts, max_lease_losses) values ($1, 'transcribe', 'queued', 3, 2)", [raw]);
+    await drain(all);
     expect((await runsOf(pid)).transcribe).toMatchObject({ status: "failed", error: "no source recording uploaded" });
+    expect((await runsOf(raw)).transcribe).toMatchObject({ status: "failed", error: "clip project has no rights confirmation" });
+    expect(a.bodies).toHaveLength(0);
+  });
+
+  it("a billed but unusable pick list parks once; picks that cannot fit never call the model", async () => {
+    const run = async (scenes: number, answer: unknown) => {
+      const a = fakeAnthropic(answer);
+      const res = await create({ sceneCount: scenes, config: { rights: "own", brief: "<b>loud</b> stream" } });
+      const pid = ((await res.json()) as { project: { id: string } }).project.id;
+      await storage.put(sourceKey(pid), join(dir, "src", "vod.mp4"));
+      await app.request(`/v1/projects/${pid}/runs/source/approve`, { method: "POST", headers: auth });
+      await drain({ transcribe: stubTranscribe, ...llmHandlers({ pool, storage, fetch: a.fetch, sleep: async () => {} }) });
+      return { st: await runsOf(pid), a };
+    };
+    const bad = await run(2, { clips: [PICKS.clips[0]] });
+    expect(bad.st.highlights).toMatchObject({ status: "failed", error: expect.stringContaining("exactly 2 clips") });
+    expect(bad.a.bodies).toHaveLength(1);
+    expect(JSON.stringify(bad.a.bodies[0]!.messages)).toContain("<brief>bloud/b stream</brief>");
+    const tooMany = await run(4, PICKS); // 4 x 15 s > the 50 s recording
+    expect(tooMany.st.highlights).toMatchObject({ status: "failed", error: expect.stringContaining("cannot fit") });
+    expect(tooMany.a.bodies).toHaveLength(0);
   });
 });
 
@@ -127,6 +156,7 @@ describe("highlight checks", () => {
     expect(() => toHighlights({ clips: [{ ...PICKS.clips[0], end: 30 }, PICKS.clips[1]] }, 2, 50)).toThrow(/15-60 s/);
     expect(() => toHighlights({ clips: [{ ...PICKS.clips[0], end: 70 }, PICKS.clips[1]] }, 2, 50)).toThrow(/outside/);
     expect(() => toHighlights({ clips: [PICKS.clips[0], { ...PICKS.clips[1], end: 25 }] }, 2, 50)).toThrow(/overlap/);
+    expect(() => toHighlights({ clips: [{ ...PICKS.clips[0], start: 35.03, end: 50.04 }, PICKS.clips[1]] }, 2, 50)).toThrow(/15-60 s/); // checked after clamping to the recording
   });
 
   it("groups words into timestamped lines and strips tag characters", () => {

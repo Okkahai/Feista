@@ -197,5 +197,14 @@ def test_clip_from_a_stream_recording(tmp_path: Path) -> None:
 
 
 def test_clip_captions_cannot_inject_ass_overrides() -> None:
-    ass = captions([("{\\fs400}hi", 0.0, 0.5), ("ok", 0.5, 1.0)], 0.0, 20.0)
-    assert "FS400HI" in ass and "\\fs400" not in ass.lower()  # braces and backslashes stripped, text kept
+    ass = captions([("{\\fs400}hi", 0.0, 0.5), ("ok", 0.5, 1.0), ("x\nDialogue: 9,0:00:00.00,9:00:00.00,Cap,,0,0,0,,EVIL", 1.0, 1.5)], 0.0, 20.0)
+    assert not any(line.startswith("Dialogue: 9") for line in ass.splitlines())
+    assert "FS400 HI" in ass and "\\fs400" not in ass.lower()  # braces and backslashes stripped, text kept
+
+
+def test_clip_source_length_is_its_shortest_stream(tmp_path: Path) -> None:
+    src = tmp_path / "uneven.mp4"  # 20 s of video, 21 s of audio: a clip to the end must not outrun the picture
+    ff("-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=20", "-f", "lavfi", "-i", "sine=duration=21",
+       "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", str(src))
+    from feista_media.clip import duration
+    assert duration(src) == pytest.approx(20, abs=0.1)
