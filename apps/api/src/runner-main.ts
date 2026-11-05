@@ -2,13 +2,13 @@
  * Runner process. Env: DATABASE_URL (login feista_runner), FEISTA_KEKS, FEISTA_KEK_CURRENT,
  * FEISTA_STORAGE_DIR, optional FEISTA_MEDIA_PYTHON (default python3; feista_media must be importable).
  * Handlers: local media stages, plus characters / keyframe / scene_video / narration on each owner's own provider keys
- * (BYOK; mocked-tested only). plus concept / script on the owner's Anthropic key. music, metadata and publish have none yet and wait in the queue.
+ * (BYOK; mocked-tested only). plus concept / script / highlights on the owner's Anthropic key, and Clip Studio's local stages. music, metadata and publish have none yet and wait in the queue.
  */
 import pg from "pg";
 import { KeyRing, redact } from "@feista/vault";
 import { generateHandlers } from "./generate";
 import { llmHandlers } from "./llm";
-import { mediaHandlers } from "./media";
+import { clipHandlers, mediaHandlers } from "./media";
 import { reapExpired, runOnce } from "./runner";
 import { localStorage } from "./storage";
 
@@ -19,8 +19,10 @@ const ring = KeyRing.parse(env("FEISTA_KEKS"), Number(env("FEISTA_KEK_CURRENT"))
 const pool = new pg.Pool({ connectionString: env("DATABASE_URL"), max: 4 });
 pool.on("error", (e) => console.error(redact(`idle db connection error: ${e.message}`)));
 const storage = localStorage(env("FEISTA_STORAGE_DIR"));
+const cmd = [process.env.FEISTA_MEDIA_PYTHON ?? "python3", "-m", "feista_media.cli"];
 const handlers = {
-  ...mediaHandlers({ pool, storage, cmd: [process.env.FEISTA_MEDIA_PYTHON ?? "python3", "-m", "feista_media.cli"] }),
+  ...mediaHandlers({ pool, storage, cmd }),
+  ...clipHandlers({ pool, storage, cmd }),
   ...generateHandlers({ pool, storage }),
   ...llmHandlers({ pool, storage }),
 };

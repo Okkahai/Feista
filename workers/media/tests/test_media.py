@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from feista_media.assemble import build_short, caption_ass, load_plan
+from feista_media.clip import captions, render, transcribe
 from feista_media.qa import Spec, check, probe
 
 CFG = {
@@ -171,3 +172,30 @@ def test_cli_exit_codes_tell_the_runner_what_to_retry(tmp_path: Path) -> None:
     missing = subprocess.run([sys.executable, "-m", "feista_media.cli", "qa", str(tmp_path / "nope.mp4")],
                              capture_output=True, text=True, check=False)
     assert missing.returncode == 75, missing.stdout  # probe failure: transient, not a QA verdict
+
+
+def test_clip_from_a_stream_recording(tmp_path: Path) -> None:
+    src = tmp_path / "vod.mp4"  # 16:9 "stream" with speech-level audio
+    ff("-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30:duration=40", "-f", "lavfi", "-i",
+       "sine=frequency=440:duration=40", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(src))
+    words = [(f"w{i}", i * 0.5, i * 0.5 + 0.4) for i in range(80)]
+    t = transcribe(src, tmp_path / "t.json", lambda p: words + [(" ", 1.0, 1.1)])
+    assert t["duration"] == pytest.approx(40, abs=0.1) and len(t["words"]) == 80  # type: ignore[arg-type]
+    out = tmp_path / "c1.mp4"
+    assert render(src, 5.0, 25.0, words, tmp_path / "w", out) == pytest.approx(20)
+    rep = probe(out)
+    assert (rep.width, rep.height, round(rep.fps)) == (1080, 1920, 30)
+    assert rep.duration == pytest.approx(20, abs=0.15)
+    assert check(rep, Spec(max_silence_s=3.0)) == []
+    ass = captions(words, 5.0, 25.0)
+    assert "W10" in ass and "W9 " not in ass and "W50" not in ass  # only the clip's own words, from 0 s
+    assert "Dialogue: 0,0:00:00.00" in ass
+    with pytest.raises(ValueError, match="15-60 s"):
+        render(src, 30.0, 41.0, words, tmp_path / "w", out)
+    with pytest.raises(ValueError, match="15-60 s"):
+        render(src, 0.0, 10.0, words, tmp_path / "w", out)
+
+
+def test_clip_captions_cannot_inject_ass_overrides() -> None:
+    ass = captions([("{\\fs400}hi", 0.0, 0.5), ("ok", 0.5, 1.0)], 0.0, 20.0)
+    assert "FS400HI" in ass and "\\fs400" not in ass.lower()  # braces and backslashes stripped, text kept
