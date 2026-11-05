@@ -25,6 +25,20 @@ export const STORY_STAGES: readonly StageDef[] = [
   { id: "publish", deps: ["review"] },
 ];
 
+/**
+ * Clip Studio DAG: the creator's own (or licensed) stream recording in, N vertical highlight clips out.
+ * `source` waits for the upload; per-scene stages run once per clip (the project's scene_count = clip count).
+ */
+export const CLIP_STAGES: readonly StageDef[] = [
+  { id: "source", deps: [], review: true }, // completes once the recording is uploaded and its rights confirmed
+  { id: "transcribe", deps: ["source"] }, // faster-whisper word timings, local
+  { id: "highlights", deps: ["transcribe"], paid: true }, // LLM ranks moments on the owner's key
+  { id: "clip_render", deps: ["highlights"], perScene: true }, // cut, 9:16 layout, captions, loudness
+  { id: "clip_qa", deps: ["clip_render"], perScene: true },
+  { id: "review", deps: ["clip_qa"], review: true },
+  { id: "publish", deps: ["review"] },
+];
+
 export interface Node {
   id: string; // "keyframe:2" or "assembly"
   stage: string;

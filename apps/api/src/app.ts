@@ -84,11 +84,18 @@ export function createApp({ pool, ring, authenticate, log = console.error }: Dep
     const threshold = int(b.approvalThresholdCents, "approvalThresholdCents", 0, 10_000_000);
     const warn = b.warnFraction;
     if (typeof warn !== "number" || !(warn > 0 && warn <= 1)) throw bad("warnFraction must be in (0, 1]");
+    // stage settings (brief, format, voices, rights...); each stage validates the fields it reads
+    const config = b.config ?? {};
+    // size is capped by the 16 KB body limit; jsonb rejects NUL
+    if (typeof config !== "object" || Array.isArray(config) || JSON.stringify(config).includes("\\u0000")) throw bad("config must be a JSON object without NUL");
+    const rights = (config as Record<string, unknown>).rights;
+    // Clip Studio only processes recordings the creator owns or is licensed to use (SECURITY.md)
+    if (b.kind === "clip" && rights !== "own" && rights !== "licensed") throw bad("a clip project needs config.rights: own or licensed");
     const row = await asUser(pool, c.get("uid"), async (tx) => {
       const created = (await tx.query(
-        `insert into projects (owner_id, kind, title, scene_count, budget_limit_cents, approval_threshold_cents, warn_fraction)
-         values (app_user(), $1, $2, $3, $4, $5, $6) returning id, kind, title, scene_count, created_at`,
-        [b.kind, title, sceneCount, limit, threshold, warn],
+        `insert into projects (owner_id, kind, title, scene_count, budget_limit_cents, approval_threshold_cents, warn_fraction, config)
+         values (app_user(), $1, $2, $3, $4, $5, $6, $7) returning id, kind, title, scene_count, created_at`,
+        [b.kind, title, sceneCount, limit, threshold, warn, config],
       )).rows[0];
       await advance(tx, created.id); // queue the root stages
       return created;

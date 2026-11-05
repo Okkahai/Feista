@@ -6,6 +6,7 @@
 import {
   type JobStatus,
   type StageRun,
+  CLIP_STAGES,
   STORY_STAGES,
   type SpendDecision,
   blockedReason,
@@ -60,7 +61,8 @@ export interface RunnerDeps {
   log?: (line: string) => void;
 }
 
-const STAGE = new Map(STORY_STAGES.map((s) => [s.id, s]));
+// stage ids shared by both DAGs (review, publish) carry the same flags, so one lookup serves both
+const STAGE = new Map([...STORY_STAGES, ...CLIP_STAGES].map((s) => [s.id, s]));
 const stageOf = (nodeId: string) => nodeId.split(":")[0]!;
 
 interface Row {
@@ -120,10 +122,9 @@ export async function advance(tx: Tx, projectId: string): Promise<void> {
   await projectLock(tx, "advance", projectId);
   const p = (await tx.query("select kind, scene_count from projects where id = $1", [projectId])).rows[0] as { kind: string; scene_count: number } | undefined;
   if (!p) throw new Error(`project ${projectId} not visible`);
-  if (p.kind !== "story") return; // shortcut: only the Story DAG exists; Clip Studio gets its own stages later
   const rows = (await tx.query("select node_id, status from stage_runs where project_id = $1", [projectId])).rows as { node_id: string; status: string }[];
   const status = Object.fromEntries(rows.map((r) => [r.node_id, r.status]));
-  for (const n of readyNodes(expand(STORY_STAGES, p.scene_count), status)) {
+  for (const n of readyNodes(expand(p.kind === "clip" ? CLIP_STAGES : STORY_STAGES, p.scene_count), status)) {
     await tx.query(
       `insert into stage_runs (project_id, node_id, status, max_attempts, max_lease_losses) values ($1, $2, $3, $4, $5)
        on conflict do nothing`,

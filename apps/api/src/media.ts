@@ -6,7 +6,7 @@
  * is its place in the episode dir assembly expects (config.json, clips/S1.mp4, vo/L1.mp3, music.mp3).
  */
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type pg from "pg";
@@ -126,6 +126,66 @@ export function mediaHandlers(deps: MediaDeps): Record<"assembly" | "media_qa", 
           const report = join(dir, "qa.json");
           await writeFile(report, out);
           await storeOutput(deps, ctx, "qa.json", report, "other", "application/json");
+        }),
+    },
+  };
+}
+
+export interface Highlight { start: number; end: number; title: string; hook: string; why: string }
+
+/** The creator's upload for a clip project. The upload flow writes it here before the `source` gate is approved. */
+export const sourceKey = (projectId: string) => `${projectId}/source/g1/source.mp4`;
+
+async function fetchSource(deps: Pick<MediaDeps, "storage">, ctx: StageContext, to: string) {
+  if (ctx.projectConfig.rights !== "own" && ctx.projectConfig.rights !== "licensed") throw new PermanentError("clip project has no rights confirmation");
+  await deps.storage.get(sourceKey(ctx.projectId), to).catch((e: NodeJS.ErrnoException) => {
+    throw e.code === "ENOENT" ? new PermanentError("no source recording uploaded") : e;
+  });
+}
+
+async function json<T>(deps: MediaDeps, ctx: StageContext, node: string, rel: string, dir: string): Promise<T> {
+  const a = (await inputs(deps, ctx.projectId)).find((x) => x.node_id === node && x.storage_key.endsWith(`/${rel}`));
+  if (!a) throw new PermanentError(`no ${rel} from the ${node} stage`);
+  await deps.storage.get(a.storage_key, join(dir, rel));
+  return JSON.parse(await readFile(join(dir, rel), "utf8")) as T;
+}
+
+/** Clip Studio's local stages: transcribe the recording, render each picked highlight, QA each clip. */
+export function clipHandlers(deps: MediaDeps): Record<"transcribe" | "clip_render" | "clip_qa", StageHandler> {
+  return {
+    transcribe: {
+      leaseMs: 5 * 60_000,
+      run: (ctx) =>
+        withTemp(async (dir) => {
+          await fetchSource(deps, ctx, join(dir, "source.mp4"));
+          await cli(deps, ["clip-transcribe", join(dir, "source.mp4"), "--out", join(dir, "transcript.json")]);
+          await storeOutput(deps, ctx, "transcript.json", join(dir, "transcript.json"), "captions", "application/json");
+        }),
+    },
+    clip_render: {
+      leaseMs: 5 * 60_000,
+      run: (ctx) =>
+        withTemp(async (dir) => {
+          const { clips } = await json<{ clips: Highlight[] }>(deps, ctx, "highlights", "highlights.json", dir);
+          const h = clips[ctx.scene ?? -1];
+          if (!h) throw new PermanentError(`highlights.json has no clip ${ctx.scene}`);
+          const t = await json<unknown>(deps, ctx, "transcribe", "transcript.json", dir);
+          await writeFile(join(dir, "t.json"), JSON.stringify(t));
+          await fetchSource(deps, ctx, join(dir, "source.mp4"));
+          const out = join(dir, "clip.mp4");
+          await cli(deps, ["clip-render", join(dir, "source.mp4"), "--start", String(h.start), "--end", String(h.end),
+            "--transcript", join(dir, "t.json"), "--work", join(dir, "work"), "--out", out]);
+          await storeOutput(deps, ctx, `clips/C${ctx.scene! + 1}.mp4`, out, "final", "video/mp4");
+        }),
+    },
+    clip_qa: {
+      run: (ctx) =>
+        withTemp(async (dir) => {
+          const clip = (await inputs(deps, ctx.projectId)).find((a) => a.node_id === `clip_render:${ctx.scene}` && a.storage_key.endsWith(".mp4"));
+          if (!clip) throw new PermanentError(`no rendered clip ${ctx.scene}`);
+          await deps.storage.get(clip.storage_key, join(dir, "c.mp4"));
+          await writeFile(join(dir, "qa.json"), await cli(deps, ["qa", join(dir, "c.mp4"), "--spec", "clip"]));
+          await storeOutput(deps, ctx, "qa.json", join(dir, "qa.json"), "other", "application/json");
         }),
     },
   };
