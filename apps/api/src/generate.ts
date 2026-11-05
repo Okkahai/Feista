@@ -95,7 +95,7 @@ export async function download(fetchImpl: Fetch, url: string, file: string): Pro
   await pipeline(Readable.fromWeb(res.body as import("node:stream/web").ReadableStream), cap, createWriteStream(file));
 }
 
-async function withTemp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+export async function withTemp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "feista-gen-"));
   try {
     return await fn(dir);
