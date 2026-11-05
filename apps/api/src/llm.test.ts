@@ -185,19 +185,22 @@ describe("text stages (mocked Anthropic)", () => {
 
   it("a dialogue format writes its own prompt and voices each character; too few voices stops before paying", async () => {
     const lines = ["Kiwi", "Plum", "Kiwi", "Plum", "Kiwi", "Plum"].map((speaker, i) => ({ speaker, text: `line ${i}`, scene: i % 4, offset: 0.2 }));
-    const a = fakeAnthropic({ script: { ...SCRIPT, lines } });
+    const concept = { title: "Who ate the last seed?", summary_stripped: "two rivals argue over a snack", story_type: "rivalry", ending_type: "reversal", characters: [{ name: "Kiwi", look: "a kiwi" }, { name: "Plum", look: "a plum" }] };
+    const a = fakeAnthropic({ concept, script: { ...SCRIPT, lines } });
     const pid = await project({ format: "dialogue_sketch", voices: ["v-kiwi", "v-plum"] });
     await drain(a.fetch);
     expect((await runsOf(pid)).script).toMatchObject({ status: "completed", error: null });
     expect(String(a.calls[0]!.body.system)).toContain("3D meme dialogue sketch");
     expect(JSON.stringify(a.calls[0]!.body.messages)).toContain("with 2-2 characters"); // capped by the two voices
-    expect(JSON.stringify(a.calls[1]!.body.messages)).toContain("speaker is the exact character name");
+    expect(JSON.stringify(a.calls[1]!.body.messages)).toContain("speaker is exactly one character name");
     expect(stored(pid, "script/g1/config.json")).toMatchObject({ format: "dialogue_sketch", line_voice: { "1": "v-kiwi", "2": "v-plum" } });
 
     const b = fakeAnthropic();
     const p2 = await project({ format: "dialogue_sketch", voices: ["only-one"] });
     const p3 = await project({ format: "no_such_format" });
+    const p4 = await project({ format: "micro_drama", voices: ["a", "b"] }, 4); // 4 shots top out at 48 s; it needs 55+
     await drain(b.fetch);
+    expect((await runsOf(p4)).concept).toMatchObject({ status: "failed", error: expect.stringContaining("4 shots cannot fit") });
     expect((await runsOf(p2)).concept).toMatchObject({ status: "failed", error: expect.stringContaining("3D meme dialogue sketch needs 2 character voices; the project has 1") });
     expect((await runsOf(p3)).concept).toMatchObject({ status: "failed", error: expect.stringContaining('unknown format "no_such_format"') });
     expect(b.calls).toHaveLength(0);
@@ -237,12 +240,15 @@ describe("toConfig", () => {
     expect(toConfig(SCRIPT, 4, animal, { voice_id: "v" })).not.toHaveProperty("line_voice");
   });
 
-  it("gives each on-screen speaker its own voice, in order of first line", () => {
-    const c = toConfig(talk(["Kiwi", "Plum", "kiwi ", "Plum", "Kiwi", "Plum"]), 4, dialogue, { voices: ["v-kiwi", "v-plum"] });
-    expect(c.line_voice).toEqual({ "1": "v-kiwi", "2": "v-plum", "3": "v-kiwi", "4": "v-plum", "5": "v-kiwi", "6": "v-plum" });
+  it("gives each character the voice at its place in the concept, whoever speaks first", () => {
+    const cast = ["Kiwi", "Plum"];
+    const c = toConfig(talk(["Plum", "Kiwi (whispering):", "kiwi", "PLUM.", "Kiwi", "Plum"]), 4, dialogue, { voices: ["v-kiwi", "v-plum"] }, cast);
+    expect(c.line_voice).toEqual({ "1": "v-plum", "2": "v-kiwi", "3": "v-kiwi", "4": "v-plum", "5": "v-kiwi", "6": "v-plum" });
     expect(c.format).toBe("dialogue_sketch");
-    expect(() => toConfig(talk(["Kiwi", "Plum", "Fig", "Kiwi", "Plum", "Fig"]), 4, dialogue, { voices: ["a", "b"] })).toThrow(/no voice for speaker 3/);
-    expect(() => toConfig(talk(["narrator", "Plum", "Kiwi", "Plum", "Kiwi", "Plum"]), 4, dialogue, { voices: ["a", "b"] })).toThrow(/line 1 needs a character/);
+    expect(() => toConfig(talk(["Kiwi", "Plum", "Fig", "Kiwi", "Plum", "Fig"]), 4, dialogue, { voices: ["a", "b"] }, cast)).toThrow(/"Fig" is not a character/);
+    expect(() => toConfig(talk(["Kiwi", "Plum", "Fig", "Kiwi", "Plum", "Fig"]), 4, dialogue, { voices: ["a", "b"] }, [...cast, "Fig"])).toThrow(/no voice for character 3/);
+    expect(() => toConfig(talk(["narrator", "Plum", "Kiwi", "Plum", "Kiwi", "Plum"]), 4, dialogue, { voices: ["a", "b"] }, cast)).toThrow(/line 1 needs a character/);
+    expect(() => toConfig(talk(["Kiwi", "Plum", "Kiwi", "Plum", "Kiwi", "Plum"]), 4, dialogue, { voices: ["a", "my voice!"] }, cast)).toThrow(/voice ids/);
   });
 
   it("allows a wordless format and keeps an inner voice to one speaker", () => {

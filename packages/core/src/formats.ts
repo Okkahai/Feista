@@ -167,5 +167,6 @@ export function resolveFormat(raw: unknown): FormatPreset {
   };
   if (out.voice === "none" ? out.lines[1] !== 0 : out.lines[0] < 1) throw new Error("format lines must be [0, 0] without speech and at least 1 with it");
   if (out.voice === "dialogue" && out.cast[0] < 2) throw new Error("a dialogue format needs at least 2 characters");
+  if (out.voice === "inner" && out.cast[0] < 1) throw new Error("an inner-voice format needs a hero (cast of at least 1)");
   return out;
 }

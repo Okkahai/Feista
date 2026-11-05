@@ -262,6 +262,16 @@ describe("generation stages (mocked providers)", () => {
     expect(q.calls).toHaveLength(0);
   });
 
+  it("a wordless plan narrates nothing and pays nothing", async () => {
+    const p = fakeProviders();
+    writeFileSync(planFile, JSON.stringify({ ...PLAN, script: {} }));
+    const pid = await project(); // no TTS rate either: nothing to price
+    await drain({ ...stubs, narration: gen(p).narration });
+    expect((await runsOf(pid)).narration).toMatchObject({ status: "completed" });
+    expect(JSON.parse(readFileSync(join(dir, "store", pid, "narration/g1/vo/words.json"), "utf8"))).toEqual({});
+    expect(p.calls).toHaveLength(0);
+  });
+
   it("a new take forgets the previous take's job id", async () => {
     const pid = await project();
     await drain(stubs);

@@ -60,6 +60,20 @@ def test_assembly_meets_delivery_spec(episode: Path, tmp_path: Path) -> None:
     assert sorted(p.name for p in episode.rglob("*")) == before
 
 
+def test_wordless_plan_assembles(episode: Path, tmp_path: Path) -> None:
+    ep = tmp_path / "ep"
+    (ep / "vo").mkdir(parents=True)
+    (ep / "clips").symlink_to(episode / "clips")
+    (ep / "music.mp3").symlink_to(episode / "music.mp3")
+    (ep / "config.json").write_text(json.dumps({**CFG, "script": {}, "vo_shot": {}, "vo_offset": {}}))
+    (ep / "vo" / "words.json").write_text("{}")
+    out = tmp_path / "final.mp4"
+    build_short(ep, tmp_path / "work", out)
+    rep = probe(out)
+    assert rep.duration == pytest.approx(20.0, abs=0.15)
+    assert rep.lufs is not None and abs(rep.lufs + 14) <= 0.6
+
+
 def test_captions_timing_and_highlight() -> None:
     plan = load_plan(CFG)
     ass = caption_ass(plan, {k: [tuple(w) for w in v] for k, v in WORDS.items()})  # type: ignore[misc]

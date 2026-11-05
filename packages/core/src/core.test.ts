@@ -175,5 +175,6 @@ describe("format presets", () => {
     expect(() => resolveFormat({ voice: "shout" })).toThrow(/voice/);
     expect(() => resolveFormat({ base: "dialogue_sketch", cast: [1, 2] })).toThrow(/at least 2/);
     expect(() => resolveFormat({ base: { base: "x" } })).toThrow();
+    expect(() => resolveFormat({ base: "anime_story", cast: [0, 0] })).toThrow(/needs a hero/);
   });
 });

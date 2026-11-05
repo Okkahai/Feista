@@ -143,7 +143,8 @@ function scene(p: Plan, ctx: StageContext) {
 
 function lines(p: Plan): [string, string][] {
   const out = Object.entries(p.script).filter(([n, t]) => /^[1-9][0-9]{0,2}$/.test(n) && typeof t === "string" && t.trim());
-  if (!out.length || out.length !== Object.keys(p.script).length) throw new PermanentError("config.json script must map line numbers to text");
+  // an empty script is a wordless format: narration then writes an empty words.json and pays nothing
+  if (out.length !== Object.keys(p.script).length) throw new PermanentError("config.json script must map line numbers to text");
   return out;
 }
 
@@ -252,6 +253,7 @@ export function generateHandlers(deps: GenerateDeps): Record<"characters" | "key
     narration: {
       estimate: async (ctx) => {
         const text = lines(await plan(deps, ctx)).map(([, t]) => t).join("");
+        if (!text) return { provider: "elevenlabs", cents: 0 };
         return estimate(tts(ctx), { text, voice_id: "x" }, TTS_MODEL, "audio.tts");
       },
       run: async (ctx) => {
