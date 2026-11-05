@@ -1,8 +1,8 @@
 /**
  * Runner process. Env: DATABASE_URL (login feista_runner), FEISTA_KEKS, FEISTA_KEK_CURRENT,
  * FEISTA_STORAGE_DIR, optional FEISTA_MEDIA_PYTHON (default python3; feista_media must be importable).
- * Handlers: local media stages, plus keyframe / scene_video / narration on each owner's own provider keys
- * (BYOK; mocked-tested only). plus concept / script on the owner's Anthropic key. characters, music, metadata and publish have none yet and wait in the queue.
+ * Handlers: local media stages, plus characters / keyframe / scene_video / narration on each owner's own provider keys
+ * (BYOK; mocked-tested only). plus concept / script on the owner's Anthropic key. music, metadata and publish have none yet and wait in the queue.
  */
 import pg from "pg";
 import { KeyRing, redact } from "@feista/vault";

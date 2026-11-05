@@ -47,7 +47,7 @@ function fakeProviders(opts: { statusSeq?: string[]; failJob?: boolean; onSubmit
     const h = (init.headers ?? {}) as Record<string, string>;
     calls.push({ method: init.method ?? "GET", url: u, auth: h.authorization ?? h["xi-api-key"], ...(init.body ? { body: JSON.parse(String(init.body)) } : {}), redirect: init.redirect });
     let m: RegExpExecArray | null;
-    if ((m = /^https:\/\/queue\.fal\.run\/(fal-ai\/nano-banana-2|bytedance\/seedance-2\.0\/image-to-video)$/.exec(u)) && init.method === "POST") {
+    if ((m = /^https:\/\/queue\.fal\.run\/(fal-ai\/nano-banana-2(?:\/edit)?|bytedance\/seedance-2\.0\/image-to-video)$/.exec(u)) && init.method === "POST") {
       await opts.onSubmit?.();
       return json({ request_id: `${m[1]!.startsWith("fal-ai") ? "img" : "vid"}-${calls.length}` });
     }
@@ -134,7 +134,7 @@ describe("generation stages (mocked providers)", () => {
   it("keyframe then image-to-video then narration, on the owner's own keys, with the job id saved before waiting", async () => {
     const p = fakeProviders();
     const pid = await project({ tts_cents_per_1k_chars: 30 });
-    await drain({ ...stubs, ...gen(p) });
+    await drain({ ...gen(p), ...stubs });
     const st = await runsOf(pid);
     expect(st["keyframe:0"]).toMatchObject({ status: "completed" });
     expect(st["scene_video:0"]).toMatchObject({ status: "completed", error: null });
@@ -168,6 +168,41 @@ describe("generation stages (mocked providers)", () => {
       { node_id: "narration", estimated_cents: 1 }, // 13 chars at 30c/1k
       { node_id: "scene_video:0", estimated_cents: 152 }, // 5 s x 30.34c
     ]);
+  });
+
+  it("the characters stage draws a sheet from the concept, and keyframes are drawn from that sheet", async () => {
+    const p = fakeProviders();
+    const pid = await project();
+    const conceptFile = join(dir, "concept.json");
+    writeFileSync(conceptFile, JSON.stringify({ title: "t", characters: [{ name: "Rex", look: "a small red fox with a blue scarf" }] }));
+    const withConcept = { ...stubs, concept: free(async (ctx) => storeOutput({ pool, storage }, ctx, "concept.json", conceptFile, "other", "application/json")) };
+    const { characters, keyframe } = gen(p);
+    await drain({ ...withConcept, characters, keyframe });
+    const st = await runsOf(pid);
+    expect(st.characters).toMatchObject({ status: "completed" });
+    expect(st["keyframe:0"]).toMatchObject({ status: "completed" });
+    const [sheetCall, keyCall] = p.calls.filter((c) => c.method === "POST");
+    expect(sheetCall).toMatchObject({ url: "https://queue.fal.run/fal-ai/nano-banana-2", body: { aspect_ratio: "16:9", prompt: expect.stringContaining("Rex: a small red fox with a blue scarf") } });
+    const sheet = (await admin.query("select source_url from assets where project_id = $1 and node_id = 'characters'", [pid])).rows[0].source_url as string;
+    expect(sheet).toMatch(/^https:\/\/v3\.fal\.media\//);
+    expect(keyCall).toMatchObject({ url: "https://queue.fal.run/fal-ai/nano-banana-2/edit", body: { image_urls: [sheet], aspect_ratio: "9:16", prompt: expect.stringMatching(/^The characters look exactly as in the reference sheet\. a fox on a log/) } });
+    // the edit job is polled under the app prefix only
+    expect(p.calls.some((c) => /\/fal-ai\/nano-banana-2\/requests\/img-\d+\/status$/.test(c.url))).toBe(true);
+    expect((await admin.query("select node_id, estimated_cents from ledger where project_id = $1 and provider = 'fal' order by node_id", [pid])).rows)
+      .toEqual([{ node_id: "characters", estimated_cents: 8 }, { node_id: "keyframe:0", estimated_cents: 8 }]);
+  });
+
+  it("a story without characters skips the sheet and keyframes use plain text-to-image", async () => {
+    const p = fakeProviders();
+    const pid = await project();
+    const conceptFile = join(dir, "concept-empty.json");
+    writeFileSync(conceptFile, JSON.stringify({ title: "t", characters: [] }));
+    const { characters, keyframe } = gen(p);
+    await drain({ ...stubs, concept: free(async (ctx) => storeOutput({ pool, storage }, ctx, "concept.json", conceptFile, "other", "application/json")), characters, keyframe });
+    const st = await runsOf(pid);
+    expect(st.characters).toMatchObject({ status: "completed" });
+    expect(st["keyframe:0"]).toMatchObject({ status: "completed" });
+    expect(p.calls.filter((c) => c.method === "POST").map((c) => c.url)).toEqual(["https://queue.fal.run/fal-ai/nano-banana-2"]);
   });
 
   it("a run that times out hands the job to the retry, which re-attaches instead of paying again", async () => {
@@ -231,7 +266,7 @@ describe("generation stages (mocked providers)", () => {
     const p = fakeProviders();
     const pid = await project(); // no tts_cents_per_1k_chars
     writeFileSync(planFile, JSON.stringify({ ...PLAN, scenes: [{ ...PLAN.scenes[0], duration: 60 }] }));
-    await drain({ ...stubs, ...gen(p) });
+    await drain({ ...gen(p), ...stubs });
     const st = await runsOf(pid);
     expect(st.narration).toMatchObject({ status: "failed", error: "paid stage has no cost estimate" });
     expect(st["keyframe:0"]).toMatchObject({ status: "failed", error: expect.stringMatching(/duration must be 4..15/) });
