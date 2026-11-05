@@ -2,11 +2,12 @@
  * Runner process. Env: DATABASE_URL (login feista_runner), FEISTA_KEKS, FEISTA_KEK_CURRENT,
  * FEISTA_STORAGE_DIR, optional FEISTA_MEDIA_PYTHON (default python3; feista_media must be importable).
  * Handlers: local media stages, plus keyframe / scene_video / narration on each owner's own provider keys
- * (BYOK; mocked-tested only). concept, script, characters, music, metadata and publish have none yet and wait in the queue.
+ * (BYOK; mocked-tested only). plus concept / script on the owner's Anthropic key. characters, music, metadata and publish have none yet and wait in the queue.
  */
 import pg from "pg";
 import { KeyRing, redact } from "@feista/vault";
 import { generateHandlers } from "./generate";
+import { llmHandlers } from "./llm";
 import { mediaHandlers } from "./media";
 import { reapExpired, runOnce } from "./runner";
 import { localStorage } from "./storage";
@@ -19,6 +20,7 @@ const storage = localStorage(env("FEISTA_STORAGE_DIR"));
 const handlers = {
   ...mediaHandlers({ pool, storage, cmd: [process.env.FEISTA_MEDIA_PYTHON ?? "python3", "-m", "feista_media.cli"] }),
   ...generateHandlers({ pool, storage }),
+  ...llmHandlers({ pool, storage }),
 };
 
 let stopping = false;

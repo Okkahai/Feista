@@ -5,7 +5,18 @@
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
-  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run", "lint": "tsc --noEmit" },
-  "dependencies": { "@feista/core": "workspace:*" },
-  "devDependencies": { "@types/node": "^22.10.0", "typescript": "^5.9.3", "vitest": "^3.2.4" }
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.3.0",
+    "@feista/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
 }
