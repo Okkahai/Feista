@@ -1,4 +1,4 @@
-/** Story Studio production DAG. Mirrors the proven Wobbi pipeline (workflow/workflow.md). */
+/** Story Studio production DAG. Mirrors the proven animal-story production pipeline (workflow/workflow.md). */
 export interface StageDef {
   id: string;
   deps: string[];

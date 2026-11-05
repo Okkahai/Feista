@@ -3,7 +3,8 @@
  * (ElevenLabs). Every call uses the project owner's own key (BYOK). VERIFICATION: mocked; never run live.
  *
  * The plan comes from the script stage's config.json (the same file assembly reads):
- *   scenes[i] = { image_prompt, video_prompt, duration (4..15 s) }, script = { "<line>": text }, voice_id.
+ *   scenes[i] = { image_prompt, video_prompt, duration (4..15 s) }, script = { "<line>": text }, voice_id,
+ *   line_voice = { "<line>": voice id } for on-screen speakers (dialogue / inner-voice formats).
  * The owner's ElevenLabs plan rate comes from projects.config.tts_cents_per_1k_chars; without it narration
  * has no estimate and the runner refuses to spend.
  */
@@ -13,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { ProviderAdapter, ProviderRequest, ProviderResult } from "@feista/core";
+import { type ProviderAdapter, type ProviderRequest, type ProviderResult, resolveFormat } from "@feista/core";
 import { type Fetch, type Word, elevenLabsAdapter, falAdapter, isFalMedia } from "@feista/providers";
 import type pg from "pg";
 import { asWorker } from "./db";
@@ -105,10 +106,20 @@ export async function withTemp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   }
 }
 
+/** The format's default look; a broken custom format already failed the text stages, so fall back quietly. */
+function formatStyle(raw: unknown) {
+  try {
+    return resolveFormat(raw).style;
+  } catch {
+    return resolveFormat(undefined).style;
+  }
+}
+
 interface Plan {
   scenes: { image_prompt: string; video_prompt: string; duration: number }[];
   script: Record<string, string>;
   voice_id?: string;
+  line_voice?: Record<string, string>;
 }
 
 /** The script stage's config.json for the current take. Bad plans are permanent: retrying will not fix them. */
@@ -132,7 +143,8 @@ function scene(p: Plan, ctx: StageContext) {
 
 function lines(p: Plan): [string, string][] {
   const out = Object.entries(p.script).filter(([n, t]) => /^[1-9][0-9]{0,2}$/.test(n) && typeof t === "string" && t.trim());
-  if (!out.length || out.length !== Object.keys(p.script).length) throw new PermanentError("config.json script must map line numbers to text");
+  // an empty script is a wordless format: narration then writes an empty words.json and pays nothing
+  if (out.length !== Object.keys(p.script).length) throw new PermanentError("config.json script must map line numbers to text");
   return out;
 }
 
@@ -170,7 +182,7 @@ export function generateHandlers(deps: GenerateDeps): Record<"characters" | "key
     });
     const cast = (c.characters ?? []).filter((x) => typeof x.name === "string" && typeof x.look === "string").slice(0, 3);
     if (!cast.length) return undefined; // an object or nature story: keyframes go without a sheet
-    const style = typeof ctx.projectConfig.style === "string" ? ctx.projectConfig.style.slice(0, 300) : "soft 3D animated film look, warm cinematic lighting";
+    const style = typeof ctx.projectConfig.style === "string" ? ctx.projectConfig.style.slice(0, 300) : formatStyle(ctx.projectConfig.format);
     return {
       prompt: `Character reference sheet on a plain light background: front, side and back view of each character, full body, consistent proportions. ` +
         `${cast.map((x) => `${String(x.name).slice(0, 60)}: ${String(x.look).slice(0, 400)}`).join(". ")}. Style: ${style}. Single image, no text or labels.`,
@@ -241,11 +253,17 @@ export function generateHandlers(deps: GenerateDeps): Record<"characters" | "key
     narration: {
       estimate: async (ctx) => {
         const text = lines(await plan(deps, ctx)).map(([, t]) => t).join("");
+        if (!text) return { provider: "elevenlabs", cents: 0 };
         return estimate(tts(ctx), { text, voice_id: "x" }, TTS_MODEL, "audio.tts");
       },
       run: async (ctx) => {
         const p = await plan(deps, ctx);
-        if (typeof p.voice_id !== "string") throw new PermanentError("config.json has no voice_id");
+        const voiceOf = (n: string) => {
+          const v = p.line_voice?.[n] ?? p.voice_id;
+          if (typeof v !== "string") throw new PermanentError(`config.json has no voice for line ${n}`);
+          return v;
+        };
+        lines(p).forEach(([n]) => voiceOf(n)); // fail before paying for any line
         const adapter = tts(ctx);
         const words: Record<string, Word[]> = {};
         // lines already spoken in this take (an earlier attempt) are reused, never re-billed
@@ -260,7 +278,7 @@ export function generateHandlers(deps: GenerateDeps): Record<"characters" | "key
               words[n] = JSON.parse(await readFile(join(dir, `L${n}.json`), "utf8")) as Word[];
               continue;
             }
-            const r = await drive(deps, adapter, ctx, { modelId: TTS_MODEL, capability: "audio.tts", input: { text, voice_id: p.voice_id } });
+            const r = await drive(deps, adapter, ctx, { modelId: TTS_MODEL, capability: "audio.tts", input: { text, voice_id: voiceOf(n) } });
             const [audio, timing] = r.outputs;
             if (!audio || !timing) throw new PermanentError("elevenlabs returned no audio or timing");
             await download(fetchImpl, audio.url, join(dir, `L${n}.mp3`));

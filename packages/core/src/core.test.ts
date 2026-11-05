@@ -150,3 +150,31 @@ describe("provider registry", () => {
     expect(() => r.register(fake("a", []))).toThrow();
   });
 });
+
+describe("format presets", () => {
+  it("every preset is internally consistent, and none is named after a channel", async () => {
+    const { FORMATS, resolveFormat } = await import("./formats");
+    expect(FORMATS).toHaveLength(16);
+    expect(new Set(FORMATS.map((f) => f.id)).size).toBe(16);
+    for (const f of FORMATS) {
+      expect(resolveFormat({ base: f.id }), f.id).toMatchObject({ voice: f.voice, lines: f.lines, cast: f.cast }); // passes the custom checks too
+      expect(f.seconds[1], f.id).toBeLessThanOrEqual(180);
+      expect(JSON.stringify(f), f.id).not.toMatch(/wobbi/i);
+    }
+    expect(resolveFormat(undefined).id).toBe("animal_story");
+  });
+
+  it("checks custom formats, which are user text headed for a prompt", async () => {
+    const { resolveFormat } = await import("./formats");
+    expect(resolveFormat({ base: "what_if", name: "Space facts", seconds: [20, 40] })).toMatchObject({ id: "custom", name: "Space facts", seconds: [20, 40], voice: "narrator" });
+    expect(resolveFormat({ base: "animal_story", voice: "none" }).lines).toEqual([0, 0]);
+    expect(() => resolveFormat("nope")).toThrow(/unknown format/);
+    expect(() => resolveFormat({ rules: "x".repeat(2001) })).toThrow(/rules must be/);
+    expect(() => resolveFormat({ seconds: [30, 600] })).toThrow(/seconds/);
+    expect(() => resolveFormat({ beats: ["one"] })).toThrow(/beats/);
+    expect(() => resolveFormat({ voice: "shout" })).toThrow(/voice/);
+    expect(() => resolveFormat({ base: "dialogue_sketch", cast: [1, 2] })).toThrow(/at least 2/);
+    expect(() => resolveFormat({ base: { base: "x" } })).toThrow();
+    expect(() => resolveFormat({ base: "anime_story", cast: [0, 0] })).toThrow(/needs a hero/);
+  });
+});

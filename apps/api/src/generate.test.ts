@@ -245,6 +245,33 @@ describe("generation stages (mocked providers)", () => {
     expect(JSON.parse(readFileSync(join(dir, "store", pid, "narration/g1/vo/words.json"), "utf8"))).toHaveProperty("1", [["Hi", 0, 0.2], ["there.", 0.3, 0.9]]);
   });
 
+  it("dialogue lines are spoken in each speaker's own voice, and a line without one fails before paying", async () => {
+    const p = fakeProviders();
+    writeFileSync(planFile, JSON.stringify({ ...PLAN, line_voice: { "1": "voice-a", "2": "voice-b" } }));
+    const pid = await project({ tts_cents_per_1k_chars: 30 });
+    await drain({ ...stubs, narration: gen(p).narration });
+    expect((await runsOf(pid)).narration).toMatchObject({ status: "completed" });
+    expect(p.calls.filter((c) => c.url.includes("elevenlabs")).map((c) => c.url.split("/")[5])).toEqual(["voice-a", "voice-b"]);
+
+    const q = fakeProviders();
+    const { voice_id: _, ...noNarrator } = PLAN;
+    writeFileSync(planFile, JSON.stringify({ ...noNarrator, line_voice: { "1": "voice-a" } }));
+    const pid2 = await project({ tts_cents_per_1k_chars: 30 });
+    await drain({ ...stubs, narration: gen(q).narration });
+    expect((await runsOf(pid2)).narration).toMatchObject({ status: "failed", error: "config.json has no voice for line 2" });
+    expect(q.calls).toHaveLength(0);
+  });
+
+  it("a wordless plan narrates nothing and pays nothing", async () => {
+    const p = fakeProviders();
+    writeFileSync(planFile, JSON.stringify({ ...PLAN, script: {} }));
+    const pid = await project(); // no TTS rate either: nothing to price
+    await drain({ ...stubs, narration: gen(p).narration });
+    expect((await runsOf(pid)).narration).toMatchObject({ status: "completed" });
+    expect(JSON.parse(readFileSync(join(dir, "store", pid, "narration/g1/vo/words.json"), "utf8"))).toEqual({});
+    expect(p.calls).toHaveLength(0);
+  });
+
   it("a new take forgets the previous take's job id", async () => {
     const pid = await project();
     await drain(stubs);

@@ -1,4 +1,4 @@
-"""Story Studio assembly. Port of the proven Wobbi `workflow/tools/build_short.py`.
+"""Story Studio assembly. Port of the proven Shorts pipeline's `workflow/tools/build_short.py`.
 
 Same config.json schema, same filter graph, captions and mix levels; the differences are
 operational: no chdir, inputs are never written to (all intermediates go to `work_dir`),
@@ -141,7 +141,10 @@ def mix_graph(plan: Plan) -> list[str]:
         ms = int(plan.vo_at[i] * 1000)
         f.append(f"[{n + 2}:a]aresample=48000,aformat=channel_layouts=stereo,volume=2.2,adelay={ms}|{ms}[v{i}]")
         labels.append(f"[v{i}]")
-    f.append("".join(labels) + f"amix=inputs={len(lines)}:normalize=0,apad,atrim=0:{total}[vo]")
+    if lines:
+        f.append("".join(labels) + f"amix=inputs={len(lines)}:normalize=0,apad,atrim=0:{total}[vo]")
+    else:  # wordless formats: a silent voice bus keeps the ducking and mix graph unchanged
+        f.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{total}[vo]")
     f.append("[vo]asplit=2[vomix][vokey]")
     f.append(f"[1:a]aresample=48000,atrim=0:{total},volume=0.30,volume=enable='between(t,{drop_s},{drop_e})':volume=0,"
              f"afade=t=out:st={total - 1.2}:d=1.2[mu]")
