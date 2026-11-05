@@ -31,6 +31,7 @@ export interface GenerateDeps {
 }
 
 const IMAGE_MODEL = "fal-ai/nano-banana-2";
+const EDIT_MODEL = "fal-ai/nano-banana-2/edit"; // same model with reference images
 const VIDEO_MODEL = "bytedance/seedance-2.0/image-to-video";
 const TTS_MODEL = "eleven_multilingual_v2";
 const IMAGE_EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
@@ -135,7 +136,7 @@ function lines(p: Plan): [string, string][] {
   return out;
 }
 
-export function generateHandlers(deps: GenerateDeps): Record<"keyframe" | "scene_video" | "narration", StageHandler> {
+export function generateHandlers(deps: GenerateDeps): Record<"characters" | "keyframe" | "scene_video" | "narration", StageHandler> {
   const fetchImpl = deps.fetch ?? fetch;
   const fal = falAdapter(fetchImpl);
   const tts = (ctx: StageContext) => {
@@ -148,24 +149,68 @@ export function generateHandlers(deps: GenerateDeps): Record<"keyframe" | "scene
   };
 
   const imageInput = (s: Plan["scenes"][number]) => ({ prompt: s.image_prompt, aspect_ratio: "9:16", resolution: "1K", num_images: 1 });
+  /** The character sheet's fal URL, when the characters stage made one: keyframes then draw from it. */
+  const sheetUrl = async (ctx: StageContext) => {
+    const a = (await inputs(deps, ctx.projectId)).find((x) => x.node_id === "characters");
+    return a?.source_url && isFalMedia(a.source_url) ? a.source_url : undefined;
+  };
+  const keyframeRequest = async (ctx: StageContext) => {
+    const input = imageInput(scene(await plan(deps, ctx), ctx));
+    const sheet = await sheetUrl(ctx);
+    return sheet
+      ? { modelId: EDIT_MODEL, input: { ...input, prompt: `The characters look exactly as in the reference sheet. ${input.prompt}`, image_urls: [sheet] } }
+      : { modelId: IMAGE_MODEL, input };
+  };
+  const characterInput = async (ctx: StageContext) => {
+    const a = (await inputs(deps, ctx.projectId)).find((x) => x.node_id === "concept" && x.storage_key.endsWith("/concept.json"));
+    if (!a) throw new PermanentError("no concept.json from the concept stage");
+    const c = await withTemp(async (dir) => {
+      await deps.storage.get(a.storage_key, join(dir, "c.json"));
+      return JSON.parse(await readFile(join(dir, "c.json"), "utf8")) as { characters?: { name?: unknown; look?: unknown }[] };
+    });
+    const cast = (c.characters ?? []).filter((x) => typeof x.name === "string" && typeof x.look === "string").slice(0, 3);
+    if (!cast.length) throw new PermanentError("concept.json has no characters to draw");
+    const style = typeof ctx.projectConfig.style === "string" ? ctx.projectConfig.style.slice(0, 300) : "soft 3D animated film look, warm cinematic lighting";
+    return {
+      prompt: `Character reference sheet on a plain light background: front, side and back view of each character, full body, consistent proportions. ` +
+        `${cast.map((x) => `${String(x.name).slice(0, 60)}: ${String(x.look).slice(0, 400)}`).join(". ")}. Style: ${style}. Single image, no text or labels.`,
+      aspect_ratio: "16:9", resolution: "1K", num_images: 1,
+    };
+  };
+  /** Store fal's image under `rel` (extension from its type), keeping its URL for the stages that reuse it. */
+  const storeImage = async (ctx: StageContext, img: { url: string; mime: string }, rel: string) => {
+    const ext = IMAGE_EXT[img.mime]; // the stored mime is served later: never trust html/svg from a provider
+    if (!ext) throw new PermanentError(`fal returned an unsupported image type ${img.mime.slice(0, 40)}`);
+    await withTemp(async (dir) => {
+      await download(fetchImpl, img.url, join(dir, "i"));
+      await storeOutput(deps, ctx, `${rel}.${ext}`, join(dir, "i"), "image", img.mime, img.url);
+    });
+  };
+  const cost = (c: number | undefined) => (c === undefined ? undefined : { reportedCents: c });
   const videoInput = (s: Plan["scenes"][number], imageUrl: string) => ({
     prompt: s.video_prompt, image_url: imageUrl, duration: String(s.duration), resolution: "720p", aspect_ratio: "9:16", generate_audio: true,
   });
 
   return {
-    keyframe: {
-      estimate: async (ctx) => estimate(fal, imageInput(scene(await plan(deps, ctx), ctx)), IMAGE_MODEL, "image.generate"),
+    characters: {
+      estimate: async (ctx) => estimate(fal, await characterInput(ctx), IMAGE_MODEL, "image.generate"),
       run: async (ctx) => {
-        const s = scene(await plan(deps, ctx), ctx);
-        const r = await drive(deps, fal, ctx, { modelId: IMAGE_MODEL, capability: "image.generate", input: imageInput(s) });
-        const img = r.outputs[0]!;
-        const ext = IMAGE_EXT[img.mime]; // the stored mime is served later: never trust html/svg from a provider
-        if (!ext) throw new PermanentError(`fal returned an unsupported image type ${img.mime.slice(0, 40)}`);
-        await withTemp(async (dir) => {
-          await download(fetchImpl, img.url, join(dir, "k"));
-          await storeOutput(deps, ctx, `keyframes/K${ctx.scene! + 1}.${ext}`, join(dir, "k"), "image", img.mime, img.url);
-        });
-        return r.reportedCents === undefined ? undefined : { reportedCents: r.reportedCents };
+        const r = await drive(deps, fal, ctx, { modelId: IMAGE_MODEL, capability: "image.generate", input: await characterInput(ctx) });
+        await storeImage(ctx, r.outputs[0]!, "characters/sheet");
+        return cost(r.reportedCents);
+      },
+    },
+
+    keyframe: {
+      estimate: async (ctx) => {
+        const k = await keyframeRequest(ctx);
+        return estimate(fal, k.input, k.modelId, "image.generate");
+      },
+      run: async (ctx) => {
+        const k = await keyframeRequest(ctx);
+        const r = await drive(deps, fal, ctx, { ...k, capability: "image.generate" });
+        await storeImage(ctx, r.outputs[0]!, `keyframes/K${ctx.scene! + 1}`);
+        return cost(r.reportedCents);
       },
     },
 

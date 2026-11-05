@@ -23,6 +23,8 @@ const VIDEO_PER_SECOND: Record<string, Record<string, number>> = {
 };
 const IMAGE: Record<string, { base: number; resolution: Record<string, number>; webSearch: number }> = {
   "fal-ai/nano-banana-2": { base: 8, resolution: { "1K": 1, "2K": 1.5, "4K": 2 }, webSearch: 1.5 },
+  // with reference images (character sheet), same price; checked 2026-11-05
+  "fal-ai/nano-banana-2/edit": { base: 8, resolution: { "1K": 1, "2K": 1.5, "4K": 2 }, webSearch: 1.5 },
 };
 
 const appOf = (model: string) => model.split("/").slice(0, 2).join("/");
