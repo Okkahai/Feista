@@ -1,4 +1,4 @@
-"""Story Studio assembly. Port of the proven Wobbi `workflow/tools/build_short.py`.
+"""Story Studio assembly. Port of the proven Shorts pipeline's `workflow/tools/build_short.py`.
 
 Same config.json schema, same filter graph, captions and mix levels; the differences are
 operational: no chdir, inputs are never written to (all intermediates go to `work_dir`),

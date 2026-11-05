@@ -10,7 +10,8 @@ import { KeyRing } from "@feista/vault";
 import { createApp } from "./app";
 import { devTokens } from "./auth";
 import { asUser } from "./db";
-import { llmHandlers, toConfig } from "./llm";
+import { resolveFormat } from "@feista/core";
+import { llmHandlers, systemPrompt, toConfig } from "./llm";
 import { runOnce } from "./runner";
 import { localStorage } from "./storage";
 
@@ -39,6 +40,7 @@ const SCRIPT = {
   lines: [
     { text: "Rex wanted one thing.", scene: 0, offset: 0.3 },
     { text: "The wind wanted it more.", scene: 1, offset: 1 },
+    { text: "So it chased the wind.", scene: 2, offset: 0.2 },
     { text: "Fine. Keep it.", scene: 3, offset: 0.5 },
   ],
   silence: { scene: 2, at: 1.5, duration: 1 },
@@ -131,8 +133,8 @@ describe("text stages (mocked Anthropic)", () => {
     const config = stored(pid, "script/g1/config.json");
     expect(config).toMatchObject({
       cuts: [["S1", 0, 6], ["S2", 0, 7], ["S3", 0, 6], ["S4", 0, 5]],
-      script: { "1": "Rex wanted one thing.", "2": "The wind wanted it more.", "3": "Fine. Keep it." },
-      vo_shot: { "1": 0, "2": 1, "3": 3 },
+      script: { "1": "Rex wanted one thing.", "2": "The wind wanted it more.", "3": "So it chased the wind.", "4": "Fine. Keep it." },
+      vo_shot: { "1": 0, "2": 1, "3": 2, "4": 3 },
       silence: [2, 1.5, 1],
       voice_id: "voice-1",
     });
@@ -181,6 +183,26 @@ describe("text stages (mocked Anthropic)", () => {
     expect(a.calls).toHaveLength(1);
   });
 
+  it("a dialogue format writes its own prompt and voices each character; too few voices stops before paying", async () => {
+    const lines = ["Kiwi", "Plum", "Kiwi", "Plum", "Kiwi", "Plum"].map((speaker, i) => ({ speaker, text: `line ${i}`, scene: i % 4, offset: 0.2 }));
+    const a = fakeAnthropic({ script: { ...SCRIPT, lines } });
+    const pid = await project({ format: "dialogue_sketch", voices: ["v-kiwi", "v-plum"] });
+    await drain(a.fetch);
+    expect((await runsOf(pid)).script).toMatchObject({ status: "completed", error: null });
+    expect(String(a.calls[0]!.body.system)).toContain("3D meme dialogue sketch");
+    expect(JSON.stringify(a.calls[0]!.body.messages)).toContain("with 2-2 characters"); // capped by the two voices
+    expect(JSON.stringify(a.calls[1]!.body.messages)).toContain("speaker is the exact character name");
+    expect(stored(pid, "script/g1/config.json")).toMatchObject({ format: "dialogue_sketch", line_voice: { "1": "v-kiwi", "2": "v-plum" } });
+
+    const b = fakeAnthropic();
+    const p2 = await project({ format: "dialogue_sketch", voices: ["only-one"] });
+    const p3 = await project({ format: "no_such_format" });
+    await drain(b.fetch);
+    expect((await runsOf(p2)).concept).toMatchObject({ status: "failed", error: expect.stringContaining("3D meme dialogue sketch needs 2 character voices; the project has 1") });
+    expect((await runsOf(p3)).concept).toMatchObject({ status: "failed", error: expect.stringContaining('unknown format "no_such_format"') });
+    expect(b.calls).toHaveLength(0);
+  });
+
   it("a refusal, a fallback and a bad script are handled honestly", async () => {
     const refused = fakeAnthropic({ stop: "refusal" });
     const p1 = await project();
@@ -201,12 +223,43 @@ describe("text stages (mocked Anthropic)", () => {
 });
 
 describe("toConfig", () => {
-  it("rejects scripts assembly or the Shorts spec would choke on", () => {
-    expect(() => toConfig({ ...SCRIPT, lines: [{ text: "x", scene: 0, offset: 6 }] }, 4, undefined)).toThrow(/outside its scene/);
-    expect(() => toConfig({ ...SCRIPT, lines: [{ text: "x", scene: 9, offset: 0 }] }, 4, undefined)).toThrow(/outside its scene/);
-    expect(() => toConfig({ ...SCRIPT, silence: { scene: 0, at: -1, duration: 1 } }, 4, undefined)).toThrow(/silence/);
-    expect(() => toConfig({ ...SCRIPT, scenes: SCRIPT.scenes.slice(0, 2) }, 2, undefined)).toThrow(/15-60/);
-    expect(() => toConfig({ ...SCRIPT, lines: [] }, 4, undefined)).toThrow(/1-12/);
-    expect(toConfig(SCRIPT, 4, 42)).not.toHaveProperty("voice_id");
+  const animal = resolveFormat(undefined);
+  const dialogue = resolveFormat("dialogue_sketch");
+  const talk = (speakers: string[]) => ({ ...SCRIPT, lines: speakers.map((speaker, i) => ({ speaker, text: `line ${i}`, scene: i % 4, offset: 0.1 })) });
+
+  it("rejects scripts assembly or the format would choke on", () => {
+    expect(() => toConfig({ ...SCRIPT, lines: [{ text: "x", scene: 0, offset: 6 }, ...SCRIPT.lines.slice(1)] }, 4, animal, {})).toThrow(/outside its scene/);
+    expect(() => toConfig({ ...SCRIPT, lines: [{ text: "x", scene: 9, offset: 0 }, ...SCRIPT.lines.slice(1)] }, 4, animal, {})).toThrow(/outside its scene/);
+    expect(() => toConfig({ ...SCRIPT, silence: { scene: 0, at: -1, duration: 1 } }, 4, animal, {})).toThrow(/silence/);
+    expect(() => toConfig({ ...SCRIPT, scenes: SCRIPT.scenes.slice(0, 2) }, 2, animal, {})).toThrow(/needs 15-40 s/);
+    expect(() => toConfig({ ...SCRIPT, lines: SCRIPT.lines.slice(0, 3) }, 4, animal, {})).toThrow(/4-6 lines/);
+    expect(toConfig(SCRIPT, 4, animal, { voice_id: 42 })).not.toHaveProperty("voice_id");
+    expect(toConfig(SCRIPT, 4, animal, { voice_id: "v" })).not.toHaveProperty("line_voice");
+  });
+
+  it("gives each on-screen speaker its own voice, in order of first line", () => {
+    const c = toConfig(talk(["Kiwi", "Plum", "kiwi ", "Plum", "Kiwi", "Plum"]), 4, dialogue, { voices: ["v-kiwi", "v-plum"] });
+    expect(c.line_voice).toEqual({ "1": "v-kiwi", "2": "v-plum", "3": "v-kiwi", "4": "v-plum", "5": "v-kiwi", "6": "v-plum" });
+    expect(c.format).toBe("dialogue_sketch");
+    expect(() => toConfig(talk(["Kiwi", "Plum", "Fig", "Kiwi", "Plum", "Fig"]), 4, dialogue, { voices: ["a", "b"] })).toThrow(/no voice for speaker 3/);
+    expect(() => toConfig(talk(["narrator", "Plum", "Kiwi", "Plum", "Kiwi", "Plum"]), 4, dialogue, { voices: ["a", "b"] })).toThrow(/line 1 needs a character/);
+  });
+
+  it("allows a wordless format and keeps an inner voice to one speaker", () => {
+    expect(toConfig({ ...SCRIPT, lines: [] }, 4, resolveFormat("asmr_loop"), {})).toMatchObject({ script: {}, line_voice: {} });
+    expect(() => toConfig({ ...SCRIPT, lines: SCRIPT.lines.slice(0, 1) }, 4, resolveFormat("asmr_loop"), {})).toThrow(/0-0 lines/);
+    const anime = resolveFormat("anime_story");
+    const long = (x: ReturnType<typeof talk>) => ({ ...x, scenes: x.scenes.map((sc) => ({ ...sc, duration: 8 })) });
+    const hero = long(talk(["Aya", "Aya", "Aya", "Aya", "Aya"]));
+    expect(toConfig(hero, 4, anime, { voice_id: "v-n" }).line_voice).toEqual({ "1": "v-n", "2": "v-n", "3": "v-n", "4": "v-n", "5": "v-n" });
+    expect(() => toConfig(long(talk(["Aya", "Ren", "Aya", "Aya", "Aya"])), 4, anime, { voice_id: "v" })).toThrow(/one speaker/);
+  });
+
+  it("writes the format into the system prompt, with no channel-specific rules", () => {
+    const sys = systemPrompt(dialogue);
+    expect(sys).toContain('"3D meme dialogue sketch"');
+    expect(sys).toContain("cold open");
+    expect(sys).not.toMatch(/wobbi/i);
+    expect(systemPrompt(resolveFormat("kids_moral"))).toContain("young children");
   });
 });
