@@ -43,13 +43,17 @@ export function anthropicAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
       const i = inputOf(req.input);
       if (!i || req.modelId !== LLM_MODEL) return undefined;
       // upper bound: ~3 chars per token on the way in, the whole max_tokens (thinking included) on the way out
-      const inTokens = Math.ceil((i.system.length + i.prompt.length + JSON.stringify(i.schema).length) / 3);
-      return Math.ceil(inTokens * CEILING.in + MAX_TOKENS * CEILING.out);
+      // A mid-answer refusal is billed and then re-run on the fallback, so the worst case pays both attempts.
+      // UTF-8 bytes bound the token count for any script (CJK, emoji, Turkish).
+      const inTokens = Buffer.byteLength(i.system + i.prompt + JSON.stringify(i.schema));
+      return Math.ceil(inTokens * (PRICE.in + CEILING.in) + MAX_TOKENS * (PRICE.out + CEILING.out));
     },
 
     async submit(req, ctx) {
       const i = inputOf(req.input);
       if (!i || req.modelId !== LLM_MODEL) return { state: "error", retryable: false, message: "anthropic: input needs system, prompt and schema" };
+      // without a key the SDK would fall back to the server's own credentials (env, profile)
+      if (!ctx.credential) return { state: "error", retryable: false, message: "anthropic: no credential" };
       // the runner owns retries: an SDK retry after a timeout could bill the same request twice
       // pinned host: an ANTHROPIC_BASE_URL in the server's env must never redirect users' keys elsewhere
       const client = new Anthropic({ apiKey: ctx.credential, baseURL: "https://api.anthropic.com", fetch: fetchImpl, maxRetries: 0, timeout: 10 * 60_000 });
@@ -65,7 +69,8 @@ export function anthropicAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
             system: i.system,
             messages: [{ role: "user", content: i.prompt }],
           },
-          ctx.signal ? { signal: ctx.signal } : {},
+          // per-request headers merge last: an ANTHROPIC_CUSTOM_HEADERS on the host cannot swap in another key
+          { headers: { authorization: `Bearer ${ctx.credential}`, "x-api-key": null }, ...(ctx.signal ? { signal: ctx.signal } : {}) },
         );
       } catch (e) {
         if (e instanceof Anthropic.RateLimitError) return { state: "error", retryable: true, message: "anthropic: rate limited" };
@@ -84,6 +89,7 @@ export function anthropicAdapter(fetchImpl: Fetch = fetch): ProviderAdapter {
       } catch {
         return { state: "error", retryable: false, message: "anthropic: answer is not JSON" };
       }
+      // shortcut: a fallback answer keeps the (ceiling) estimate as its cost; price usage.iterations per model once that matters
       const fellBack = msg.model !== LLM_MODEL;
       const reportedCents = fellBack ? undefined : Math.ceil(msg.usage.input_tokens * PRICE.in + msg.usage.output_tokens * PRICE.out);
       return {

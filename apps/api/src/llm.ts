@@ -94,7 +94,7 @@ async function upstream(deps: GenerateDeps, ctx: StageContext, node: string, rel
 
 const brief = (ctx: StageContext, title: string) => {
   const b = ctx.projectConfig.brief;
-  return (typeof b === "string" && b.trim() ? b : title).slice(0, 2000);
+  return (typeof b === "string" && b.trim() ? b : title).replace(/[<>]/g, "").slice(0, 2000); // cannot close its own tag
 };
 
 /** Turn the model's script into the assembly config, checking everything assembly and the generators rely on. */
@@ -131,20 +131,28 @@ export function llmHandlers(deps: GenerateDeps): Record<"concept" | "script", St
     const cents = llm.estimateCents({ modelId: LLM_MODEL, capability: "llm.text", input, idempotencyKey: "" });
     return cents === undefined ? undefined : { provider: "anthropic", cents };
   };
-  /** Ask, validate the JSON, store it under `rel`; returns what was stored. */
-  const ask = async (ctx: StageContext, input: Record<string, unknown>) => {
+  /**
+   * Ask, then hand the paid answer to `use`. A text call cannot be re-attached like a fal job, so once the
+   * answer is in, any failure (storage, DB, a malformed answer) parks the node instead of paying again.
+   */
+  const ask = async (ctx: StageContext, input: Record<string, unknown>, use: (json: unknown) => Promise<void>) => {
     const r = await drive(deps, llm, ctx, { modelId: LLM_MODEL, capability: "llm.text", input });
-    return withTemp(async (dir) => {
-      await download(deps.fetch ?? fetch, r.outputs[0]!.url, join(dir, "a.json"));
-      return { json: JSON.parse(await readFile(join(dir, "a.json"), "utf8")) as unknown, reportedCents: r.reportedCents };
-    });
+    try {
+      await withTemp(async (dir) => {
+        await download(deps.fetch ?? fetch, r.outputs[0]!.url, join(dir, "a.json"));
+        await use(JSON.parse(await readFile(join(dir, "a.json"), "utf8")) as unknown);
+      });
+    } catch (e) {
+      if (e instanceof PermanentError) throw e;
+      throw new PermanentError(`answer received (and billed) but storing it failed; not retried: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    return r.reportedCents === undefined ? undefined : { reportedCents: r.reportedCents };
   };
   const save = (ctx: StageContext, rel: string, value: unknown) =>
     withTemp(async (dir) => {
       await writeFile(join(dir, rel), JSON.stringify(value, null, 2));
       await storeOutput(deps, ctx, rel, join(dir, rel), "other", "application/json");
     });
-  const cost = (c: number | undefined) => (c === undefined ? undefined : { reportedCents: c });
 
   const conceptInput = async (ctx: StageContext) => {
     const p = await project(deps, ctx.projectId);
@@ -175,23 +183,22 @@ export function llmHandlers(deps: GenerateDeps): Record<"concept" | "script", St
   return {
     concept: {
       estimate: async (ctx) => est(await conceptInput(ctx)),
-      run: async (ctx) => {
-        const { json, reportedCents } = await ask(ctx, await conceptInput(ctx));
-        const c = json as Partial<Concept>;
-        if (typeof c.title !== "string" || typeof c.summary_stripped !== "string") throw new PermanentError("concept answer is missing its title or summary");
-        await save(ctx, "concept.json", c);
-        return cost(reportedCents);
-      },
+      run: async (ctx) =>
+        ask(ctx, await conceptInput(ctx), async (json) => {
+          const c = json as Partial<Concept>;
+          if (typeof c.title !== "string" || typeof c.summary_stripped !== "string") throw new PermanentError("concept answer is missing its title or summary");
+          await save(ctx, "concept.json", c);
+        }),
     },
     script: {
       estimate: async (ctx) => est(await scriptInput(ctx)),
       run: async (ctx) => {
         const p = await project(deps, ctx.projectId);
-        const { json, reportedCents } = await ask(ctx, await scriptInput(ctx));
-        const s = json as Script;
-        if (!Array.isArray(s.scenes) || !Array.isArray(s.lines) || !s.silence) throw new PermanentError("script answer has the wrong shape");
-        await save(ctx, "config.json", toConfig(s, p.scene_count, ctx.projectConfig.voice_id));
-        return cost(reportedCents);
+        return ask(ctx, await scriptInput(ctx), async (json) => {
+          const s = json as Script;
+          if (!Array.isArray(s.scenes) || !Array.isArray(s.lines) || !s.silence) throw new PermanentError("script answer has the wrong shape");
+          await save(ctx, "config.json", toConfig(s, p.scene_count, ctx.projectConfig.voice_id));
+        });
       },
     },
   };

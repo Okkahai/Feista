@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import pg from "pg";
@@ -55,7 +55,7 @@ function fakeAnthropic(opts: { concept?: Record<string, unknown>; script?: unkno
     const answer = isScript ? (opts.script ?? SCRIPT) : (opts.concept ?? { title: "Who stole the hat?", summary_stripped: `a thief turns out to be ${calls.length}`, story_type: "misunderstanding", ending_type: "reveal" });
     return new Response(JSON.stringify({
       id: "msg_1", type: "message", role: "assistant", model: opts.model ?? "claude-opus-5-5",
-      content: [{ type: "text", text: JSON.stringify(answer) }],
+      content: opts.stop === "refusal" ? [] : [{ type: "text", text: JSON.stringify(answer) }],
       stop_reason: opts.stop ?? "end_turn", stop_sequence: null, stop_details: opts.stop === "refusal" ? { type: "refusal", category: "general_harms", explanation: "" } : null,
       usage: { input_tokens: 1000, output_tokens: 2000 },
     }), { status: 200, headers: { "content-type": "application/json", "request-id": "req_1" } });
@@ -74,8 +74,8 @@ async function project(config: Record<string, unknown> = {}, scenes = 4) {
     return id;
   });
 }
-async function drain(f: typeof fetch) {
-  const handlers = llmHandlers({ pool, storage, fetch: f, sleep: async () => {} });
+async function drain(f: typeof fetch, store = storage) {
+  const handlers = llmHandlers({ pool, storage: store, fetch: f, sleep: async () => {} });
   for (let i = 0; i < 20; i++) if (!(await runOnce({ pool, ring, handlers, delayMs: () => 0, log: () => {} }))) return;
   throw new Error("runner did not go idle");
 }
@@ -84,7 +84,11 @@ const runsOf = async (pid: string) =>
 const stored = (pid: string, rel: string) => JSON.parse(readFileSync(join(dir, "store", pid, rel), "utf8"));
 
 beforeAll(async () => {
-  process.env.ANTHROPIC_BASE_URL = "https://attacker.example"; // a server env var must never redirect a user's key
+  // server env must never redirect or replace a user's key
+  process.env.ANTHROPIC_BASE_URL = "https://attacker.example";
+  process.env.ANTHROPIC_CUSTOM_HEADERS = "Authorization: Bearer sk-ant-OPERATOR\nX-Api-Key: sk-ant-OPERATOR";
+  process.env.ANTHROPIC_API_KEY = "sk-ant-OPERATOR";
+  process.env.ANTHROPIC_AUTH_TOKEN = "sk-ant-OPERATOR";
   await admin.query("alter role feista_api login password 'feista-test'");
   await admin.query("alter role feista_runner login password 'feista-test'");
   await admin.query("insert into users (id, email) values ($1, $2)", [U, `${U}@x.test`]);
@@ -115,6 +119,8 @@ describe("text stages (mocked Anthropic)", () => {
     expect(a.calls).toHaveLength(2);
     for (const c of a.calls) {
       expect(c.headers.get("authorization")).toBe(`Bearer ${KEY}`); // SDK 1.x sends API keys as a Bearer token
+      expect(c.headers.get("x-api-key")).toBeNull();
+      expect([...c.headers.values()].join(" ")).not.toContain("OPERATOR");
       expect(c.headers.get("anthropic-beta")).toContain("server-side-fallback-2026-07-01");
       expect(c.body).toMatchObject({ model: "claude-opus-5-5", fallbacks: "default", output_config: { format: { type: "json_schema" } } });
       expect(c.body.temperature).toBeUndefined();
@@ -138,15 +144,41 @@ describe("text stages (mocked Anthropic)", () => {
     // reserved at the fallback-ceiling estimate, then the real cost: 1000 in x 0.04c/1k + 2000 out x 2c/1k = 4.4 -> 5
     const ledger = (await admin.query("select node_id, estimated_cents, reported_cents from ledger where project_id = $1 order by node_id", [pid])).rows;
     expect(ledger.map((l) => [l.node_id, l.reported_cents])).toEqual([["concept", 5], ["script", 5]]);
-    expect(ledger.every((l) => l.estimated_cents >= 40)).toBe(true);
+    expect(ledger.every((l) => l.estimated_cents >= 72)).toBe(true); // two full 16k-token attempts (refusal + fallback)
   });
 
-  it("a new concept is checked against the owner's earlier ones", async () => {
+  it("a new concept is checked against the owner's earlier ones, never another user's", async () => {
+    // another user's finished concept, written straight into the store
+    const other = randomUUID();
+    await admin.query("insert into users (id, email) values ($1, $2)", [other, `${other}@x.test`]);
+    const op = (await admin.query(
+      "insert into projects (owner_id, kind, title, scene_count, budget_limit_cents, approval_threshold_cents, warn_fraction) values ($1, 'story', 'x', 4, 1, 1, 0.5) returning id", [other],
+    )).rows[0].id as string;
+    await admin.query("insert into stage_runs (project_id, node_id, status, max_attempts, max_lease_losses) values ($1, 'concept', 'completed', 3, 2)", [op]);
+    const f = join(dir, "other.json");
+    writeFileSync(f, JSON.stringify({ title: "t", summary_stripped: "SECRET-OF-ANOTHER-USER", story_type: "x", ending_type: "y" }));
+    await storage.put(`${op}/concept/g1/concept.json`, f);
+    await admin.query("insert into assets (project_id, node_id, generation, kind, storage_key, mime, bytes) values ($1::uuid, 'concept', 1, 'other', $1::text || '/concept/g1/concept.json', 'application/json', 1)", [op]);
+
+    const first = fakeAnthropic({ concept: { title: "t", summary_stripped: "MINE-EARLIER", story_type: "rivalry", ending_type: "reveal" } });
+    await project();
+    await drain(first.fetch);
     const a = fakeAnthropic();
     await project();
     await drain(a.fetch);
-    const prompts = a.calls.filter((c) => !JSON.stringify(c.body.output_config).includes("end_state")).map((c) => JSON.stringify(c.body.messages));
-    expect(prompts.at(-1)).toMatch(/a thief turns out to be \d+ \(misunderstanding, reveal\)/);
+    const prompt = JSON.stringify(a.calls[0]!.body.messages);
+    expect(prompt).toContain("MINE-EARLIER (rivalry, reveal)");
+    expect(prompt).not.toContain("SECRET-OF-ANOTHER-USER");
+  });
+
+  it("a paid answer whose storing fails parks the node instead of paying again", async () => {
+    const a = fakeAnthropic();
+    const pid = await project();
+    let failed = false;
+    const flaky = { ...storage, put: async (k: string, from: string) => { if (!failed) { failed = true; throw new Error("disk full"); } return storage.put(k, from); } };
+    await drain(a.fetch, flaky);
+    expect((await runsOf(pid)).concept).toMatchObject({ status: "failed", error: expect.stringMatching(/billed.*not retried.*disk full/) });
+    expect(a.calls).toHaveLength(1);
   });
 
   it("a refusal, a fallback and a bad script are handled honestly", async () => {
