@@ -6,12 +6,11 @@ Status: `todo` · `blocked` · `in-progress` · `done-unverified` · `done-verif
 Cloud thread for all app work: "Build Feista AI content studio app" (`cmsg_01U7qerMcGzpwbbMezf8yt6QKQ3QKUY2nQgvwi4UBRAQTu`, session `cse_01EkSrumsWMYB69ABRqU7A74`). It is not reachable from T3 Code; its state is fully on GitHub (confirmed by that session 2026-11-06 13:51 UTC: clean tree, no local-only commits or stashes).
 
 ## Execution order (recommended)
-1. T-018, T-021, T-017 (preservation and doc drift, no code)
-2. T-006 → T-001 → T-004 → T-005 (unblock a full Story run end to end locally)
-3. T-002, T-003 → T-010 (mobile)
-4. T-008, T-007, T-014
-5. T-009, T-011, T-022
-6. Blocked on Gün: T-012, T-013, T-015, T-016; legacy: T-019, T-020
+1. T-006 → T-001 → T-004 → T-005 (unblock a full Story run end to end locally)
+2. T-002, T-003 → T-010 (mobile)
+3. T-008, T-007, T-014
+4. T-009, T-011, T-022
+5. Blocked on Gün: T-012, T-013, T-015, T-016; legacy: T-019, T-020
 
 ## Dependency graph
 ```
@@ -103,18 +102,17 @@ T-001 ─► T-011 MediaPipe crop (needs real uploads to test)
 - **Status** blocked (Gün, paid) · **P3**.
 
 ### T-017 · Fix docs drift
-- **Status** todo · **P0** · Small docs PR.
+- **Status** done (2026-11-10, PR #16): TESTING.md counts updated; PROGRESS points to this registry.
 - `docs/TESTING.md` counts are stale (says core 13, media 5; actual 2026-11-06: core 19, vault 38, providers 8, api 56, mobile 15, media 12). `docs/DEVELOPMENT_PROGRESS.md` "_Last updated 2026-11-04_" and "Next" item 3 (adapters, already done). Point both at this registry.
 
 ### T-018 · Preserve the format research doc in the repo
-- **Status** todo · **P0** · **Cloud-only artifact.**
-- The research behind D-04/D-10 is a Claude Doc: "Animasyon Short formatları: yapı ve optimizasyon araştırması" (https://claude.ai/artifact/NejD3kCfmvFP7qr3Lcwzi2, Turkish, ~17 KB, rev 7). It is not in git. Its operative content is encoded in `formats.ts`, but the source table, 14 technique names and citations are not.
+- **Status** done-verified (2026-11-10): exported to `docs/research/animation-short-formats-2026-11-05.md`, byte count checked against the source (17030 B, byline dropped).
+- The research behind D-04/D-10 is a Claude Doc: "Animasyon Short formatları: yapı ve optimizasyon araştırması" (https://claude.ai/artifact/NejD3kCfmvFP7qr3Lcwzi2, Turkish, ~17 KB, rev 7). Now also in git (see status above). Its operative content is encoded in `formats.ts`, but the source table, 14 technique names and citations are not.
 - **Next action (Gün or a cloud session before shutdown)** export it as Markdown and commit to `docs/research/animation-short-formats-2026-11-05.md` (drop the personal byline; repo is public).
 
 ### T-021 · Archive the legacy channel workspace off the cloud
-- **Status** todo · **P0** · **Needs Gün's OK** (writes to Gün's PC).
+- **Status** deferred — **Gün chose to skip it (2026-11-10)**. Accepted risk: the workspace below is lost if the cloud project is deleted. Do not reopen unless Gün asks.
 - `/mnt/project-files/workflow/` (workflow.md v2 incl. Production Rules v4 §9, story-log.md, episode-log.md, episodes/ with keyframes, clips, VO, configs, outputs; tools/build_short.py, assemble.sh; assets/characters sheets), `app/screens/`, and `yt ctzx.txt` (original channel brief) exist only in the cloud project's shared folder. Media is private and large: **do not commit to the public repo.**
-- **Next action** copy to Gün's PC (e.g. `Codebase\feista-archive\`) or a private repo; text docs could go to a private repo.
 
 ### T-022 · Clip Studio quality: diarization, caption cleanup
 - **Status** todo · **P3** · captions are raw transcript words; no speaker labels.
@@ -126,7 +124,7 @@ T-001 ─► T-011 MediaPipe crop (needs real uploads to test)
 - **Status** deferred until ~2026-10-27 … 2026-11-27 data window (L-02). Due for Gün's review now; nothing to do without Gün.
 
 ### T-000 · Migration to T3 Code (this handoff)
-- **Status** in-progress. Docs committed on `claude/project-thread-919fup` (local commit; push pending Gün's approval at writing time). See `docs/agent/HANDOFF.md` §6 for the cut-over checklist.
+- **Status** done (2026-11-10): handoff merged via PR #16 with Gün's approval. Remaining cut-over step is Gün's: clone locally and run VERIFICATION.md. See `docs/agent/HANDOFF.md` §6.
 
 ---
 
