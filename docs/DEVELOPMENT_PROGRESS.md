@@ -1,5 +1,7 @@
 # Development progress
 
+> Open work now lives in `docs/agent/TASK_REGISTRY.md` (stable task IDs, 2026-11-06). The "Next" list below is kept as history and is partly stale (see T-017).
+
 _Last updated 2026-11-04._ Status words: planned · implemented · mocked · tested locally · tested live · integrated · production-ready.
 
 ## Done (session 1, all merged into `develop` via PR + independent review + CI)
